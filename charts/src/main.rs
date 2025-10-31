@@ -257,6 +257,46 @@ struct InteractionState {
     drag_start_pos: Vec2,
 }
 
+/// Grid configuration
+#[derive(Resource)]
+struct ChartGrid {
+    show_grid: bool,
+    grid_color: Color,
+    y_tick_count: usize,      // Number of horizontal grid lines
+    x_tick_count: usize,      // Number of vertical grid lines
+}
+
+impl Default for ChartGrid {
+    fn default() -> Self {
+        Self {
+            show_grid: true,
+            grid_color: Color::srgba(0.3, 0.3, 0.3, 0.3),
+            y_tick_count: 8,
+            x_tick_count: 10,
+        }
+    }
+}
+
+/// Axes configuration
+#[derive(Resource)]
+struct ChartAxes {
+    show_x_labels: bool,
+    show_y_labels: bool,
+    label_color: Color,
+    label_size: f32,
+}
+
+impl Default for ChartAxes {
+    fn default() -> Self {
+        Self {
+            show_x_labels: true,
+            show_y_labels: true,
+            label_color: Color::srgb(0.8, 0.8, 0.8),
+            label_size: 16.0,
+        }
+    }
+}
+
 // ============================================================================
 // COMPONENTS
 // ============================================================================
@@ -275,6 +315,10 @@ struct CandlestickBody {
 /// Marker component for chart elements
 #[derive(Component)]
 struct ChartElement;
+
+/// Marker component for grid elements (lines and labels)
+#[derive(Component)]
+struct GridElement;
 
 // ============================================================================
 // SYSTEMS
@@ -332,6 +376,8 @@ fn setup(mut commands: Commands) {
     commands.insert_resource(db);
     commands.insert_resource(chart);
     commands.insert_resource(InteractionState::default());
+    commands.insert_resource(ChartGrid::default());
+    commands.insert_resource(ChartAxes::default());
 
     println!("Setup complete!");
 }
@@ -426,6 +472,139 @@ fn render_candlesticks(
         start,
         end - 1
     );
+}
+
+fn render_grid_and_axes(
+    mut commands: Commands,
+    chart: Res<Chart>,
+    grid: Res<ChartGrid>,
+    axes: Res<ChartAxes>,
+    query: Query<Entity, With<GridElement>>,
+) {
+    if !chart.needs_redraw {
+        return;
+    }
+
+    // Despawn existing grid elements
+    for entity in query.iter() {
+        commands.entity(entity).despawn();
+    }
+
+    if !grid.show_grid {
+        return;
+    }
+
+    let viewport = &chart.space.viewport;
+
+    // ========== HORIZONTAL GRID LINES (Price levels) ==========
+    for i in 0..=grid.y_tick_count {
+        let price_percent = i as f32 / grid.y_tick_count as f32;
+        let price = chart.space.visible_price_min +
+            price_percent * (chart.space.visible_price_max - chart.space.visible_price_min);
+
+        let y = viewport.min.y + price_percent * viewport.height();
+        let left = viewport.min.x;
+        let right = viewport.max.x;
+
+        // Draw horizontal line
+        let line_center = Vec2::new((left + right) / 2.0, y);
+        let line_width = right - left;
+
+        commands.spawn((
+            SpriteBundle {
+                sprite: Sprite {
+                    color: grid.grid_color,
+                    custom_size: Some(Vec2::new(line_width, 1.0)),
+                    ..default()
+                },
+                transform: Transform::from_translation(line_center.extend(-1.0)),
+                ..default()
+            },
+            GridElement,
+        ));
+
+        // Y-axis label (price) on the right side
+        if axes.show_y_labels {
+            let label_x = right + 40.0;
+            let label_text = format!("{:.2}", price);
+
+            commands.spawn((
+                Text2dBundle {
+                    text: Text::from_section(
+                        label_text,
+                        TextStyle {
+                            font_size: axes.label_size,
+                            color: axes.label_color,
+                            ..default()
+                        },
+                    ),
+                    transform: Transform::from_translation(Vec3::new(label_x, y, 2.0)),
+                    ..default()
+                },
+                GridElement,
+            ));
+        }
+    }
+
+    // ========== VERTICAL GRID LINES (Time intervals) ==========
+    for i in 0..=grid.x_tick_count {
+        let candle_percent = i as f32 / grid.x_tick_count as f32;
+        let candle_index = chart.space.visible_candle_start +
+            (candle_percent * chart.space.visible_candle_count as f32) as usize;
+
+        if candle_index >= chart.candles.len() {
+            continue;
+        }
+
+        let x = viewport.min.x + candle_percent * viewport.width();
+        let bottom = viewport.min.y;
+        let top = viewport.max.y;
+
+        // Draw vertical line
+        let line_center = Vec2::new(x, (bottom + top) / 2.0);
+        let line_height = top - bottom;
+
+        commands.spawn((
+            SpriteBundle {
+                sprite: Sprite {
+                    color: grid.grid_color,
+                    custom_size: Some(Vec2::new(1.0, line_height)),
+                    ..default()
+                },
+                transform: Transform::from_translation(line_center.extend(-1.0)),
+                ..default()
+            },
+            GridElement,
+        ));
+
+        // X-axis label (time) at the bottom
+        if axes.show_x_labels {
+            let candle = &chart.candles[candle_index];
+            let label_y = bottom - 30.0;
+
+            // Format timestamp using chrono
+            use chrono::{DateTime, Utc};
+            let datetime = DateTime::<Utc>::from_timestamp(candle.time / 1000, 0)
+                .unwrap_or_default();
+            let label_text = datetime.format("%m/%d %H:%M").to_string();
+
+            commands.spawn((
+                Text2dBundle {
+                    text: Text::from_section(
+                        label_text,
+                        TextStyle {
+                            font_size: axes.label_size,
+                            color: axes.label_color,
+                            ..default()
+                        },
+                    ),
+                    transform: Transform::from_translation(Vec3::new(x, label_y, 2.0)),
+                    ..default()
+                },
+                GridElement,
+            ));
+        }
+    }
 }
 
 fn handle_mouse_input(
@@ -628,6 +807,7 @@ fn main() {
         .add_systems(Startup, setup)
         .add_systems(Update, handle_mouse_input)
         .add_systems(Update, check_lazy_load)
+        .add_systems(Update, render_grid_and_axes)
         .add_systems(Update, render_candlesticks)
         .run();
 }
