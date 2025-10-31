@@ -297,6 +297,28 @@ impl Default for ChartAxes {
     }
 }
 
+/// Crosshair configuration
+#[derive(Resource)]
+struct Crosshair {
+    enabled: bool,
+    line_color: Color,
+    show_ohlcv_box: bool,
+    show_price_label: bool,
+    show_time_label: bool,
+}
+
+impl Default for Crosshair {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            line_color: Color::srgba(1.0, 1.0, 1.0, 0.5),
+            show_ohlcv_box: true,
+            show_price_label: true,
+            show_time_label: true,
+        }
+    }
+}
+
 // ============================================================================
 // COMPONENTS
 // ============================================================================
@@ -319,6 +341,10 @@ struct ChartElement;
 /// Marker component for grid elements (lines and labels)
 #[derive(Component)]
 struct GridElement;
+
+/// Marker component for crosshair elements
+#[derive(Component)]
+struct CrosshairElement;
 
 // ============================================================================
 // SYSTEMS
@@ -379,6 +405,7 @@ fn setup(mut commands: Commands) {
     commands.insert_resource(InteractionState::default());
     commands.insert_resource(ChartGrid::default());
     commands.insert_resource(ChartAxes::default());
+    commands.insert_resource(Crosshair::default());
 
     println!("Setup complete!");
 }
@@ -610,6 +637,156 @@ fn render_grid_and_axes(
     }
 }
 
+fn render_crosshair(
+    mut commands: Commands,
+    chart: Res<Chart>,
+    crosshair: Res<Crosshair>,
+    interaction: Res<InteractionState>,
+    query: Query<Entity, With<CrosshairElement>>,
+) {
+    // Despawn existing crosshair elements
+    for entity in query.iter() {
+        commands.entity(entity).despawn();
+    }
+
+    if !crosshair.enabled {
+        return;
+    }
+
+    let viewport = &chart.space.viewport;
+
+    // Check if mouse is within viewport
+    if !viewport.contains(interaction.mouse_pos) {
+        return;
+    }
+
+    let mouse_x = interaction.mouse_pos.x;
+    let mouse_y = interaction.mouse_pos.y;
+
+    // ========== VERTICAL CROSSHAIR LINE ==========
+    commands.spawn((
+        SpriteBundle {
+            sprite: Sprite {
+                color: crosshair.line_color,
+                custom_size: Some(Vec2::new(1.0, viewport.height())),
+                ..default()
+            },
+            transform: Transform::from_translation(Vec3::new(
+                mouse_x,
+                viewport.center().y,
+                3.0,
+            )),
+            ..default()
+        },
+        CrosshairElement,
+    ));
+
+    // ========== HORIZONTAL CROSSHAIR LINE ==========
+    commands.spawn((
+        SpriteBundle {
+            sprite: Sprite {
+                color: crosshair.line_color,
+                custom_size: Some(Vec2::new(viewport.width(), 1.0)),
+                ..default()
+            },
+            transform: Transform::from_translation(Vec3::new(
+                viewport.center().x,
+                mouse_y,
+                3.0,
+            )),
+            ..default()
+        },
+        CrosshairElement,
+    ));
+
+    // ========== FIND CANDLE AT CURSOR ==========
+    let (candle_index, price_at_cursor) = chart.space.from_world(interaction.mouse_pos);
+
+    if candle_index >= chart.candles.len() {
+        return;
+    }
+
+    let candle = &chart.candles[candle_index];
+
+    // ========== PRICE LABEL AT CROSSHAIR ==========
+    if crosshair.show_price_label {
+        let label_text = format!("{:.2}", price_at_cursor);
+        let label_x = viewport.max.x + 50.0;
+
+        commands.spawn((
+            Text2dBundle {
+                text: Text::from_section(
+                    label_text,
+                    TextStyle {
+                        font_size: 14.0,
+                        color: Color::srgb(1.0, 1.0, 0.0), // Yellow for crosshair price
+                        ..default()
+                    },
+                ),
+                transform: Transform::from_translation(Vec3::new(label_x, mouse_y, 4.0)),
+                text_anchor: bevy::sprite::Anchor::CenterLeft,
+                ..default()
+            },
+            CrosshairElement,
+        ));
+    }
+
+    // ========== TIME LABEL AT CROSSHAIR ==========
+    if crosshair.show_time_label {
+        use chrono::{DateTime, Utc};
+        let datetime = DateTime::<Utc>::from_timestamp(candle.time / 1000, 0)
+            .unwrap_or_default();
+        let label_text = datetime.format("%m/%d %H:%M").to_string();
+        let label_y = viewport.min.y - 40.0;
+
+        commands.spawn((
+            Text2dBundle {
+                text: Text::from_section(
+                    label_text,
+                    TextStyle {
+                        font_size: 14.0,
+                        color: Color::srgb(1.0, 1.0, 0.0), // Yellow for crosshair time
+                        ..default()
+                    },
+                ),
+                transform: Transform::from_translation(Vec3::new(mouse_x, label_y, 4.0)),
+                text_anchor: bevy::sprite::Anchor::Center,
+                ..default()
+            },
+            CrosshairElement,
+        ));
+    }
+
+    // ========== OHLCV INFO BOX ==========
+    if crosshair.show_ohlcv_box {
+        let info_text = format!(
+            "O: {:.2}  H: {:.2}  L: {:.2}  C: {:.2}\nVol: {:.2}",
+            candle.open, candle.high, candle.low, candle.close, candle.volume
+        );
+
+        // Position info box near top-left of chart
+        let info_x = viewport.min.x + 100.0;
+        let info_y = viewport.max.y - 40.0;
+
+        commands.spawn((
+            Text2dBundle {
+                text: Text::from_section(
+                    info_text,
+                    TextStyle {
+                        font_size: 16.0,
+                        color: Color::srgb(1.0, 1.0, 1.0),
+                        ..default()
+                    },
+                ),
+                transform: Transform::from_translation(Vec3::new(info_x, info_y, 4.0)),
+                text_anchor: bevy::sprite::Anchor::TopLeft,
+                ..default()
+            },
+            CrosshairElement,
+        ));
+    }
+}
+
 fn handle_mouse_input(
     mut chart: ResMut<Chart>,
     mut interaction: ResMut<InteractionState>,
@@ -812,5 +989,6 @@ fn main() {
         .add_systems(Update, check_lazy_load)
         .add_systems(Update, render_grid_and_axes)
         .add_systems(Update, render_candlesticks)
+        .add_systems(Update, render_crosshair)
         .run();
 }
