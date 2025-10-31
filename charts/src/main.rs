@@ -350,10 +350,11 @@ fn setup(mut commands: Commands) {
 
     println!("Loaded {} candles", candles.len());
 
-    // Initialize chart space
+    // Initialize chart space (leave room for axes labels)
+    // Window is 1600x900, but we need margins for labels
     let viewport = Rect::from_center_size(
-        Vec2::ZERO,
-        Vec2::new(1600.0, 900.0),
+        Vec2::new(-40.0, 10.0),  // Offset left and up slightly
+        Vec2::new(1400.0, 780.0), // Smaller than window to leave room for labels
     );
 
     let visible_candle_count = 50.min(candles.len());
@@ -525,13 +526,13 @@ fn render_grid_and_axes(
 
         // Y-axis label (price) on the right side
         if axes.show_y_labels {
-            let label_x = right + 40.0;
+            let label_x = right + 50.0;
             let label_text = format!("{:.2}", price);
 
             commands.spawn((
                 Text2dBundle {
                     text: Text::from_section(
-                        label_text,
+                        label_text.clone(),
                         TextStyle {
                             font_size: axes.label_size,
                             color: axes.label_color,
@@ -539,6 +540,7 @@ fn render_grid_and_axes(
                         },
                     ),
                     transform: Transform::from_translation(Vec3::new(label_x, y, 2.0)),
+                    text_anchor: bevy::sprite::Anchor::CenterLeft,
                     ..default()
                 },
                 GridElement,
@@ -580,7 +582,7 @@ fn render_grid_and_axes(
         // X-axis label (time) at the bottom
         if axes.show_x_labels {
             let candle = &chart.candles[candle_index];
-            let label_y = bottom - 30.0;
+            let label_y = bottom - 40.0;
 
             // Format timestamp using chrono
             use chrono::{DateTime, Utc};
@@ -591,7 +593,7 @@ fn render_grid_and_axes(
             commands.spawn((
                 Text2dBundle {
                     text: Text::from_section(
-                        label_text,
+                        label_text.clone(),
                         TextStyle {
                             font_size: axes.label_size,
                             color: axes.label_color,
@@ -599,6 +601,7 @@ fn render_grid_and_axes(
                         },
                     ),
                     transform: Transform::from_translation(Vec3::new(x, label_y, 2.0)),
+                    text_anchor: bevy::sprite::Anchor::Center,
                     ..default()
                 },
                 GridElement,
