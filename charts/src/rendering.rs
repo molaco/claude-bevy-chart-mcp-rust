@@ -281,61 +281,131 @@ pub fn render_grid_and_axes(
         }
     }
 
-    // ========== PANE SEPARATORS ==========
-    for i in 0..chart.panes.len() - 1 {
-        let pane_bottom = chart.panes[i].space.viewport.min.y;
-        let next_pane_top = chart.panes[i + 1].space.viewport.max.y;
+    // ========== PANE BORDERS (Panel-style separation) ==========
+    for pane in &chart.panes {
+        let viewport = &pane.space.viewport;
+        let border_color = Color::srgba(0.5, 0.5, 0.5, 0.6);
+        let border_thickness = 2.0;
 
-        // Center separator in the gap between panes
-        let separator_y = (pane_bottom + next_pane_top) / 2.0;
-        let line_center = Vec2::new((chart_left + chart_right) / 2.0, separator_y);
-        let line_width = chart_right - chart_left;
-
+        // Top border
         commands.spawn((
             SpriteBundle {
                 sprite: Sprite {
-                    color: Color::srgba(0.6, 0.6, 0.6, 0.8), // More visible gray
-                    custom_size: Some(Vec2::new(line_width, 4.0)), // Thicker line
+                    color: border_color,
+                    custom_size: Some(Vec2::new(viewport.width(), border_thickness)),
                     ..default()
                 },
-                transform: Transform::from_translation(line_center.extend(0.5)),
+                transform: Transform::from_translation(Vec3::new(
+                    viewport.center().x,
+                    viewport.max.y,
+                    0.4,
+                )),
+                ..default()
+            },
+            GridElement,
+        ));
+
+        // Bottom border
+        commands.spawn((
+            SpriteBundle {
+                sprite: Sprite {
+                    color: border_color,
+                    custom_size: Some(Vec2::new(viewport.width(), border_thickness)),
+                    ..default()
+                },
+                transform: Transform::from_translation(Vec3::new(
+                    viewport.center().x,
+                    viewport.min.y,
+                    0.4,
+                )),
+                ..default()
+            },
+            GridElement,
+        ));
+
+        // Left border
+        commands.spawn((
+            SpriteBundle {
+                sprite: Sprite {
+                    color: border_color,
+                    custom_size: Some(Vec2::new(border_thickness, viewport.height())),
+                    ..default()
+                },
+                transform: Transform::from_translation(Vec3::new(
+                    viewport.min.x,
+                    viewport.center().y,
+                    0.4,
+                )),
+                ..default()
+            },
+            GridElement,
+        ));
+
+        // Right border
+        commands.spawn((
+            SpriteBundle {
+                sprite: Sprite {
+                    color: border_color,
+                    custom_size: Some(Vec2::new(border_thickness, viewport.height())),
+                    ..default()
+                },
+                transform: Transform::from_translation(Vec3::new(
+                    viewport.max.x,
+                    viewport.center().y,
+                    0.4,
+                )),
                 ..default()
             },
             GridElement,
         ));
     }
 
-    // ========== VERTICAL GRID LINES (Time - spans all panes) ==========
-    for i in 0..=grid.x_tick_count {
-        let candle_percent = i as f32 / grid.x_tick_count as f32;
-        let candle_index = chart.visible_candle_start +
-            (candle_percent * chart.visible_candle_count as f32) as usize;
+    // ========== VERTICAL GRID LINES (Time - per pane) ==========
+    for pane in &chart.panes {
+        let viewport = &pane.space.viewport;
 
-        if candle_index >= chart.candles.len() {
-            continue;
-        }
+        for i in 0..=grid.x_tick_count {
+            let candle_percent = i as f32 / grid.x_tick_count as f32;
+            let candle_index = chart.visible_candle_start +
+                (candle_percent * chart.visible_candle_count as f32) as usize;
 
-        let x = chart_left + candle_percent * (chart_right - chart_left);
+            if candle_index >= chart.candles.len() {
+                continue;
+            }
 
-        // Draw vertical line spanning all panes
-        let line_center = Vec2::new(x, (chart_bottom + chart_top) / 2.0);
-        let line_height = chart_top - chart_bottom;
+            let x = chart_left + candle_percent * (chart_right - chart_left);
 
-        commands.spawn((
-            SpriteBundle {
-                sprite: Sprite {
-                    color: grid.grid_color,
-                    custom_size: Some(Vec2::new(1.0, line_height)),
+            // Draw vertical line within this pane only
+            let line_center = Vec2::new(x, viewport.center().y);
+            let line_height = viewport.height();
+
+            commands.spawn((
+                SpriteBundle {
+                    sprite: Sprite {
+                        color: grid.grid_color,
+                        custom_size: Some(Vec2::new(1.0, line_height)),
+                        ..default()
+                    },
+                    transform: Transform::from_translation(line_center.extend(-1.0)),
                     ..default()
                 },
-                transform: Transform::from_translation(line_center.extend(-1.0)),
-                ..default()
-            },
-            GridElement,
-        ));
+                GridElement,
+            ));
+        }
+    }
 
-        // X-axis label (time) at the bottom of the last pane
-        if axes.show_x_labels {
+    // ========== X-AXIS TIME LABELS (at bottom of last pane) ==========
+    if axes.show_x_labels {
+        for i in 0..=grid.x_tick_count {
+            let candle_percent = i as f32 / grid.x_tick_count as f32;
+            let candle_index = chart.visible_candle_start +
+                (candle_percent * chart.visible_candle_count as f32) as usize;
+
+            if candle_index >= chart.candles.len() {
+                continue;
+            }
+
+            let x = chart_left + candle_percent * (chart_right - chart_left);
             let candle = &chart.candles[candle_index];
             let label_y = chart_bottom - 40.0;
 
