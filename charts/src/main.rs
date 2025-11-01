@@ -799,9 +799,14 @@ fn handle_mouse_input(
     };
 
     // Update mouse position (convert to world space)
+    // Bevy's cursor_position() has (0,0) at top-left with Y down
+    // World space has (0,0) at center with Y up - need to flip Y
     if let Some(cursor_pos) = window.cursor_position() {
         let window_size = Vec2::new(window.width(), window.height());
-        interaction.mouse_pos = cursor_pos - window_size / 2.0;
+        interaction.mouse_pos = Vec2::new(
+            cursor_pos.x - window_size.x / 2.0,
+            window_size.y / 2.0 - cursor_pos.y,  // Flip Y axis
+        );
     }
 
     // Pan: Left mouse button drag
