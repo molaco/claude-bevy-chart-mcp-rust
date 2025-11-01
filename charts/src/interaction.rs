@@ -11,9 +11,9 @@ pub fn handle_mouse_input(
     mut interaction: ResMut<InteractionState>,
     mouse_button: Res<ButtonInput<MouseButton>>,
     mut mouse_wheel: EventReader<MouseWheel>,
-    window_query: Query<&Window>,
+    mut window_query: Query<&mut Window>,
 ) {
-    let Ok(window) = window_query.get_single() else {
+    let Ok(mut window) = window_query.get_single_mut() else {
         return;
     };
 
@@ -26,6 +26,89 @@ pub fn handle_mouse_input(
             cursor_pos.x - window_size.x / 2.0,
             window_size.y / 2.0 - cursor_pos.y,  // Flip Y axis
         );
+    }
+
+    let mouse_y = interaction.mouse_pos.y;
+
+    // ========== PANE RESIZE: Gap Detection ==========
+    interaction.hover_resize_gap = None;
+    for i in 0..chart.panes.len().saturating_sub(1) {
+        let pane_bottom = chart.panes[i].space.viewport.min.y;
+        let next_pane_top = chart.panes[i + 1].space.viewport.max.y;
+
+        // Check if mouse is in the gap between panes
+        if mouse_y <= pane_bottom && mouse_y >= next_pane_top {
+            interaction.hover_resize_gap = Some(i);
+            break;
+        }
+    }
+
+    // Change cursor when hovering gap
+    if interaction.hover_resize_gap.is_some() || interaction.resizing_gap.is_some() {
+        window.cursor.icon = CursorIcon::NsResize;
+    } else {
+        window.cursor.icon = CursorIcon::Default;
+    }
+
+    // ========== PANE RESIZE: Start/Stop ==========
+    if mouse_button.just_pressed(MouseButton::Left) {
+        if let Some(gap_idx) = interaction.hover_resize_gap {
+            // Start resize
+            interaction.resizing_gap = Some(gap_idx);
+            interaction.drag_start_pos = interaction.mouse_pos;
+            interaction.resize_start_heights = chart.panes.iter()
+                .map(|p| p.height_percent)
+                .collect();
+        }
+    }
+
+    if mouse_button.just_released(MouseButton::Left) {
+        if interaction.resizing_gap.is_some() {
+            interaction.resizing_gap = None;
+            window.cursor.icon = CursorIcon::Default;
+        }
+    }
+
+    // ========== PANE RESIZE: Drag Logic ==========
+    if let Some(gap_idx) = interaction.resizing_gap {
+        let delta_y = interaction.mouse_pos.y - interaction.drag_start_pos.y;
+
+        // Calculate available height (excluding gaps)
+        const SEPARATOR_GAP: f32 = 40.0;
+        let num_gaps = chart.panes.len() - 1;
+        let available_height = chart.total_area.height() - (num_gaps as f32 * SEPARATOR_GAP);
+
+        // Convert pixel movement to percentage change
+        let delta_percent = -delta_y / available_height; // Negative because Y is flipped
+
+        // Get original heights
+        let orig_above = interaction.resize_start_heights[gap_idx];
+        let orig_below = interaction.resize_start_heights[gap_idx + 1];
+
+        // Calculate new heights with constraints
+        let new_above = (orig_above + delta_percent).clamp(0.1, 0.9);
+        let new_below = (orig_below - delta_percent).clamp(0.1, 0.9);
+
+        // Check if both constraints are satisfied
+        let total_change = (new_above - orig_above).abs() + (new_below - orig_below).abs();
+        if total_change > 0.001 {
+            chart.panes[gap_idx].height_percent = new_above;
+            chart.panes[gap_idx + 1].height_percent = new_below;
+
+            // Store values before mutable borrow
+            let total_area = chart.total_area;
+            let visible_candle_count = chart.visible_candle_count;
+
+            // Recalculate layouts
+            calculate_pane_layouts(&mut chart.panes, total_area, visible_candle_count);
+
+            // Update Y-axis bounds
+            update_pane_bounds(&mut chart);
+
+            chart.needs_redraw = true;
+        }
+
+        return; // Skip pan/zoom while resizing
     }
 
     // Check if mouse is in any pane

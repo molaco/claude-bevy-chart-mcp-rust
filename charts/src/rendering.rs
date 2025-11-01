@@ -360,6 +360,38 @@ pub fn render_grid_and_axes(
         ));
     }
 
+    // ========== RESIZE GRIP (Horizontal lines in gaps) ==========
+    for i in 0..chart.panes.len() - 1 {
+        let pane_bottom = chart.panes[i].space.viewport.min.y;
+        let next_pane_top = chart.panes[i + 1].space.viewport.max.y;
+        let gap_center_y = (pane_bottom + next_pane_top) / 2.0;
+        let gap_center_x = (chart_left + chart_right) / 2.0;
+
+        let grip_width = 50.0;
+        let line_height = 2.0;
+        let line_spacing = 4.0;
+        let grip_color = Color::srgba(0.6, 0.6, 0.6, 0.7);
+
+        // Draw 4 horizontal lines
+        for j in 0..4 {
+            let offset = (j as f32 - 1.5) * (line_height + line_spacing);
+            let line_y = gap_center_y + offset;
+
+            commands.spawn((
+                SpriteBundle {
+                    sprite: Sprite {
+                        color: grip_color,
+                        custom_size: Some(Vec2::new(grip_width, line_height)),
+                        ..default()
+                    },
+                    transform: Transform::from_translation(Vec3::new(gap_center_x, line_y, 0.6)),
+                    ..default()
+                },
+                GridElement,
+            ));
+        }
+    }
+
     // ========== VERTICAL GRID LINES (Time - per pane) ==========
     for pane in &chart.panes {
         let viewport = &pane.space.viewport;

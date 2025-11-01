@@ -246,6 +246,7 @@ pub struct Chart {
 
     // Multi-pane support
     pub panes: Vec<Pane>,
+    pub total_area: Rect,              // Total chart viewport for resize calculations
 
     // Coordinate system (DEPRECATED - use panes instead)
     pub space: ChartSpace,
@@ -364,6 +365,11 @@ pub struct InteractionState {
     pub mouse_pos: Vec2,
     pub dragging: bool,
     pub drag_start_pos: Vec2,
+
+    // Pane resize state
+    pub hover_resize_gap: Option<usize>,    // Which gap is being hovered
+    pub resizing_gap: Option<usize>,        // Which gap is being dragged
+    pub resize_start_heights: Vec<f32>,     // Original height_percent values
 }
 
 /// Grid configuration

@@ -114,6 +114,7 @@ fn setup(mut commands: Commands) {
         visible_candle_start,
         visible_candle_count,
         panes,
+        total_area,
         space, // Deprecated
         needs_redraw: true,
         loading: false,
