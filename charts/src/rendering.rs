@@ -200,10 +200,10 @@ pub fn render_volume_bars(
     );
 }
 
-/// Initialize persistent crosshair entities (called once at startup)
+/// Initialize persistent crosshair entities (called once at startup from setup)
 pub fn init_crosshair(
-    mut commands: Commands,
-    chart: Res<Chart>,
+    commands: &mut Commands,
+    chart: &Chart,
 ) {
     let mut horizontal_lines = Vec::new();
     let mut price_labels = Vec::new();

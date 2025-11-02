@@ -22,7 +22,6 @@ fn main() {
             ..default()
         }))
         .add_systems(Startup, setup)
-        .add_systems(Startup, init_crosshair)
         .add_systems(Update, handle_mouse_input)
         .add_systems(Update, check_lazy_load)
         .add_systems(Update, render_grid_and_axes)
@@ -120,6 +119,9 @@ fn setup(mut commands: Commands) {
         needs_redraw: true,
         loading: false,
     };
+
+    // Initialize persistent crosshair entities (needs chart reference)
+    init_crosshair(&mut commands, &chart);
 
     commands.insert_resource(db);
     commands.insert_resource(chart);
