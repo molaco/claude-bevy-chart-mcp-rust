@@ -22,12 +22,13 @@ fn main() {
             ..default()
         }))
         .add_systems(Startup, setup)
+        .add_systems(Startup, init_crosshair)
         .add_systems(Update, handle_mouse_input)
         .add_systems(Update, check_lazy_load)
         .add_systems(Update, render_grid_and_axes)
         .add_systems(Update, render_candlesticks)
         .add_systems(Update, render_volume_bars)
-        .add_systems(Update, render_crosshair)
+        .add_systems(Update, update_crosshair)
         .run();
 }
 

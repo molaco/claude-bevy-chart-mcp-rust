@@ -200,6 +200,136 @@ pub fn render_volume_bars(
     );
 }
 
+/// Initialize persistent crosshair entities (called once at startup)
+pub fn init_crosshair(
+    mut commands: Commands,
+    chart: Res<Chart>,
+) {
+    let mut horizontal_lines = Vec::new();
+    let mut price_labels = Vec::new();
+
+    // Calculate chart bounds
+    if chart.panes.is_empty() {
+        return;
+    }
+
+    let first_pane = &chart.panes[0];
+    let last_pane = &chart.panes[chart.panes.len() - 1];
+    let chart_top = first_pane.space.viewport.max.y;
+    let chart_bottom = last_pane.space.viewport.min.y;
+    let chart_right = first_pane.space.viewport.max.x;
+    let total_height = chart_top - chart_bottom;
+
+    // Spawn vertical line (spans all panes)
+    let vertical_line = commands.spawn((
+        SpriteBundle {
+            sprite: Sprite {
+                color: Color::srgba(1.0, 1.0, 1.0, 0.5),
+                custom_size: Some(Vec2::new(1.0, total_height)),
+                ..default()
+            },
+            transform: Transform::from_translation(Vec3::new(0.0, (chart_top + chart_bottom) / 2.0, 3.0)),
+            visibility: Visibility::Hidden,
+            ..default()
+        },
+        CrosshairElement,
+    )).id();
+
+    // Spawn horizontal lines and price labels (one per pane)
+    for pane in &chart.panes {
+        let viewport = &pane.space.viewport;
+
+        // Horizontal line for this pane
+        let h_line = commands.spawn((
+            SpriteBundle {
+                sprite: Sprite {
+                    color: Color::srgba(1.0, 1.0, 1.0, 0.5),
+                    custom_size: Some(Vec2::new(viewport.width(), 1.0)),
+                    ..default()
+                },
+                transform: Transform::from_translation(Vec3::new(viewport.center().x, 0.0, 3.0)),
+                visibility: Visibility::Hidden,
+                ..default()
+            },
+            CrosshairElement,
+        )).id();
+        horizontal_lines.push((pane.id, h_line));
+
+        // Price label for this pane
+        let label = commands.spawn((
+            Text2dBundle {
+                text: Text::from_section(
+                    "",
+                    TextStyle {
+                        font_size: 14.0,
+                        color: Color::srgb(1.0, 1.0, 0.0),
+                        ..default()
+                    },
+                ),
+                transform: Transform::from_translation(Vec3::new(chart_right + 50.0, 0.0, 4.0)),
+                text_anchor: bevy::sprite::Anchor::CenterLeft,
+                visibility: Visibility::Hidden,
+                ..default()
+            },
+            CrosshairElement,
+        )).id();
+        price_labels.push((pane.id, label));
+    }
+
+    // Spawn time label
+    let time_label = commands.spawn((
+        Text2dBundle {
+            text: Text::from_section(
+                "",
+                TextStyle {
+                    font_size: 14.0,
+                    color: Color::srgb(1.0, 1.0, 0.0),
+                    ..default()
+                },
+            ),
+            transform: Transform::from_translation(Vec3::new(0.0, chart_bottom - 40.0, 4.0)),
+            text_anchor: bevy::sprite::Anchor::Center,
+            visibility: Visibility::Hidden,
+            ..default()
+        },
+        CrosshairElement,
+    )).id();
+
+    // Spawn OHLCV info box
+    let ohlcv_box = commands.spawn((
+        Text2dBundle {
+            text: Text::from_section(
+                "",
+                TextStyle {
+                    font_size: 16.0,
+                    color: Color::srgb(1.0, 1.0, 1.0),
+                    ..default()
+                },
+            ),
+            transform: Transform::from_translation(Vec3::new(
+                first_pane.space.viewport.min.x + 100.0,
+                first_pane.space.viewport.max.y - 40.0,
+                4.0
+            )),
+            text_anchor: bevy::sprite::Anchor::TopLeft,
+            visibility: Visibility::Hidden,
+            ..default()
+        },
+        CrosshairElement,
+    )).id();
+
+    // Insert the resource
+    commands.insert_resource(CrosshairEntities {
+        vertical_line,
+        horizontal_lines,
+        price_labels,
+        time_label,
+        ohlcv_box,
+    });
+
+    println!("Initialized persistent crosshair entities");
+}
+
 pub fn render_grid_and_axes(
     mut commands: Commands,
     chart: Res<Chart>,
@@ -466,19 +596,36 @@ pub fn render_grid_and_axes(
     }
 }
 
-pub fn render_crosshair(
-    mut commands: Commands,
+pub fn update_crosshair(
+    crosshair_entities: Res<CrosshairEntities>,
     chart: Res<Chart>,
     crosshair: Res<Crosshair>,
     interaction: Res<InteractionState>,
-    query: Query<Entity, With<CrosshairElement>>,
+    mut transforms: Query<&mut Transform>,
+    mut visibilities: Query<&mut Visibility>,
+    mut texts: Query<&mut Text>,
 ) {
-    // Despawn existing crosshair elements
-    for entity in query.iter() {
-        commands.entity(entity).despawn();
-    }
-
     if !crosshair.enabled || chart.panes.is_empty() {
+        // Hide all crosshair elements
+        if let Ok(mut vis) = visibilities.get_mut(crosshair_entities.vertical_line) {
+            *vis = Visibility::Hidden;
+        }
+        for (_, entity) in &crosshair_entities.horizontal_lines {
+            if let Ok(mut vis) = visibilities.get_mut(*entity) {
+                *vis = Visibility::Hidden;
+            }
+        }
+        for (_, entity) in &crosshair_entities.price_labels {
+            if let Ok(mut vis) = visibilities.get_mut(*entity) {
+                *vis = Visibility::Hidden;
+            }
+        }
+        if let Ok(mut vis) = visibilities.get_mut(crosshair_entities.time_label) {
+            *vis = Visibility::Hidden;
+        }
+        if let Ok(mut vis) = visibilities.get_mut(crosshair_entities.ohlcv_box) {
+            *vis = Visibility::Hidden;
+        }
         return;
     }
 
@@ -487,7 +634,6 @@ pub fn render_crosshair(
     let last_pane = &chart.panes[chart.panes.len() - 1];
     let chart_top = first_pane.space.viewport.max.y;
     let chart_bottom = last_pane.space.viewport.min.y;
-    let chart_left = first_pane.space.viewport.min.x;
     let chart_right = first_pane.space.viewport.max.x;
 
     // Check if mouse is within any pane
@@ -496,81 +642,99 @@ pub fn render_crosshair(
     });
 
     if !mouse_in_chart {
+        // Hide all elements when mouse is outside chart
+        if let Ok(mut vis) = visibilities.get_mut(crosshair_entities.vertical_line) {
+            *vis = Visibility::Hidden;
+        }
+        for (_, entity) in &crosshair_entities.horizontal_lines {
+            if let Ok(mut vis) = visibilities.get_mut(*entity) {
+                *vis = Visibility::Hidden;
+            }
+        }
+        for (_, entity) in &crosshair_entities.price_labels {
+            if let Ok(mut vis) = visibilities.get_mut(*entity) {
+                *vis = Visibility::Hidden;
+            }
+        }
+        if let Ok(mut vis) = visibilities.get_mut(crosshair_entities.time_label) {
+            *vis = Visibility::Hidden;
+        }
+        if let Ok(mut vis) = visibilities.get_mut(crosshair_entities.ohlcv_box) {
+            *vis = Visibility::Hidden;
+        }
         return;
     }
 
     let mouse_x = interaction.mouse_pos.x;
     let mouse_y = interaction.mouse_pos.y;
 
-    // ========== VERTICAL CROSSHAIR LINE (spans all panes) ==========
-    let total_height = chart_top - chart_bottom;
-    commands.spawn((
-        SpriteBundle {
-            sprite: Sprite {
-                color: crosshair.line_color,
-                custom_size: Some(Vec2::new(1.0, total_height)),
-                ..default()
-            },
-            transform: Transform::from_translation(Vec3::new(
-                mouse_x,
-                (chart_top + chart_bottom) / 2.0,
-                3.0,
-            )),
-            ..default()
-        },
-        CrosshairElement,
-    ));
+    // ========== UPDATE VERTICAL CROSSHAIR LINE ==========
+    if let Ok(mut transform) = transforms.get_mut(crosshair_entities.vertical_line) {
+        transform.translation.x = mouse_x;
+    }
+    if let Ok(mut vis) = visibilities.get_mut(crosshair_entities.vertical_line) {
+        *vis = Visibility::Visible;
+    }
 
-    // ========== PER-PANE HORIZONTAL CROSSHAIR LINES & VALUE LABELS ==========
+    // ========== UPDATE PER-PANE HORIZONTAL LINES & LABELS ==========
     for pane in &chart.panes {
         let viewport = &pane.space.viewport;
 
+        // Find entities for this pane
+        let h_line_entity = crosshair_entities.horizontal_lines.iter()
+            .find(|(id, _)| *id == pane.id)
+            .map(|(_, e)| *e);
+        let label_entity = crosshair_entities.price_labels.iter()
+            .find(|(id, _)| *id == pane.id)
+            .map(|(_, e)| *e);
+
         // Check if mouse Y is within this pane
         if mouse_y >= viewport.min.y && mouse_y <= viewport.max.y {
-            // Draw horizontal line within this pane
-            commands.spawn((
-                SpriteBundle {
-                    sprite: Sprite {
-                        color: crosshair.line_color,
-                        custom_size: Some(Vec2::new(viewport.width(), 1.0)),
-                        ..default()
-                    },
-                    transform: Transform::from_translation(Vec3::new(
-                        viewport.center().x,
-                        mouse_y,
-                        3.0,
-                    )),
-                    ..default()
-                },
-                CrosshairElement,
-            ));
+            // Update horizontal line position
+            if let Some(entity) = h_line_entity {
+                if let Ok(mut transform) = transforms.get_mut(entity) {
+                    transform.translation.y = mouse_y;
+                }
+                if let Ok(mut vis) = visibilities.get_mut(entity) {
+                    *vis = Visibility::Visible;
+                }
+            }
 
-            // Show value label for this pane
+            // Update price label
             if crosshair.show_price_label {
-                let (_, value_at_cursor) = pane.space.from_world(
-                    interaction.mouse_pos,
-                    chart.visible_candle_start,
-                    chart.visible_candle_count
-                );
-                let label_text = format!("{:.2}", value_at_cursor);
-                let label_x = chart_right + 50.0;
+                if let Some(entity) = label_entity {
+                    let (_, value_at_cursor) = pane.space.from_world(
+                        interaction.mouse_pos,
+                        chart.visible_candle_start,
+                        chart.visible_candle_count
+                    );
 
-                commands.spawn((
-                    Text2dBundle {
-                        text: Text::from_section(
-                            label_text,
-                            TextStyle {
-                                font_size: 14.0,
-                                color: Color::srgb(1.0, 1.0, 0.0), // Yellow for crosshair
-                                ..default()
-                            },
-                        ),
-                        transform: Transform::from_translation(Vec3::new(label_x, mouse_y, 4.0)),
-                        text_anchor: bevy::sprite::Anchor::CenterLeft,
-                        ..default()
-                    },
-                    CrosshairElement,
-                ));
+                    if let Ok(mut text) = texts.get_mut(entity) {
+                        text.sections[0].value = format!("{:.2}", value_at_cursor);
+                    }
+                    if let Ok(mut transform) = transforms.get_mut(entity) {
+                        transform.translation.y = mouse_y;
+                    }
+                    if let Ok(mut vis) = visibilities.get_mut(entity) {
+                        *vis = Visibility::Visible;
+                    }
+                }
+            } else if let Some(entity) = label_entity {
+                if let Ok(mut vis) = visibilities.get_mut(entity) {
+                    *vis = Visibility::Hidden;
+                }
+            }
+        } else {
+            // Mouse not in this pane, hide its elements
+            if let Some(entity) = h_line_entity {
+                if let Ok(mut vis) = visibilities.get_mut(entity) {
+                    *vis = Visibility::Hidden;
+                }
+            }
+            if let Some(entity) = label_entity {
+                if let Ok(mut vis) = visibilities.get_mut(entity) {
+                    *vis = Visibility::Hidden;
+                }
             }
         }
     }
@@ -583,64 +747,55 @@ pub fn render_crosshair(
     };
 
     if candle_index >= chart.candles.len() {
+        // Hide time label and OHLCV box if no valid candle
+        if let Ok(mut vis) = visibilities.get_mut(crosshair_entities.time_label) {
+            *vis = Visibility::Hidden;
+        }
+        if let Ok(mut vis) = visibilities.get_mut(crosshair_entities.ohlcv_box) {
+            *vis = Visibility::Hidden;
+        }
         return;
     }
 
     let candle = &chart.candles[candle_index];
 
-    // ========== TIME LABEL AT CROSSHAIR ==========
+    // ========== UPDATE TIME LABEL ==========
     if crosshair.show_time_label {
         let datetime = DateTime::<Utc>::from_timestamp(candle.time / 1000, 0)
             .unwrap_or_default();
         let label_text = datetime.format("%m/%d %H:%M").to_string();
-        let label_y = chart_bottom - 40.0;
 
-        commands.spawn((
-            Text2dBundle {
-                text: Text::from_section(
-                    label_text,
-                    TextStyle {
-                        font_size: 14.0,
-                        color: Color::srgb(1.0, 1.0, 0.0), // Yellow for crosshair time
-                        ..default()
-                    },
-                ),
-                transform: Transform::from_translation(Vec3::new(mouse_x, label_y, 4.0)),
-                text_anchor: bevy::sprite::Anchor::Center,
-                ..default()
-            },
-            CrosshairElement,
-        ));
+        if let Ok(mut text) = texts.get_mut(crosshair_entities.time_label) {
+            text.sections[0].value = label_text;
+        }
+        if let Ok(mut transform) = transforms.get_mut(crosshair_entities.time_label) {
+            transform.translation.x = mouse_x;
+        }
+        if let Ok(mut vis) = visibilities.get_mut(crosshair_entities.time_label) {
+            *vis = Visibility::Visible;
+        }
+    } else {
+        if let Ok(mut vis) = visibilities.get_mut(crosshair_entities.time_label) {
+            *vis = Visibility::Hidden;
+        }
     }
 
-    // ========== OHLCV INFO BOX (at top of Price pane) ==========
+    // ========== UPDATE OHLCV INFO BOX ==========
     if crosshair.show_ohlcv_box {
         let info_text = format!(
             "O: {:.2}  H: {:.2}  L: {:.2}  C: {:.2}\nVol: {:.2}",
             candle.open, candle.high, candle.low, candle.close, candle.volume
         );
 
-        // Find Price pane and position box at its top-left
-        if let Some(price_pane) = chart.panes.iter().find(|p| matches!(p.id, PaneId::Price)) {
-            let info_x = price_pane.space.viewport.min.x + 100.0;
-            let info_y = price_pane.space.viewport.max.y - 40.0;
-
-            commands.spawn((
-                Text2dBundle {
-                    text: Text::from_section(
-                        info_text,
-                        TextStyle {
-                            font_size: 16.0,
-                            color: Color::srgb(1.0, 1.0, 1.0),
-                            ..default()
-                        },
-                    ),
-                    transform: Transform::from_translation(Vec3::new(info_x, info_y, 4.0)),
-                    text_anchor: bevy::sprite::Anchor::TopLeft,
-                    ..default()
-                },
-                CrosshairElement,
-            ));
+        if let Ok(mut text) = texts.get_mut(crosshair_entities.ohlcv_box) {
+            text.sections[0].value = info_text;
+        }
+        if let Ok(mut vis) = visibilities.get_mut(crosshair_entities.ohlcv_box) {
+            *vis = Visibility::Visible;
+        }
+    } else {
+        if let Ok(mut vis) = visibilities.get_mut(crosshair_entities.ohlcv_box) {
+            *vis = Visibility::Hidden;
         }
     }
 }
