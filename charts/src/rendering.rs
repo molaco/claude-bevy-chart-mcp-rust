@@ -9,13 +9,13 @@ use crate::types::*;
 pub fn render_candlesticks(
     mut commands: Commands,
     chart: Res<Chart>,
-    query: Query<Entity, With<ChartElement>>,
+    query: Query<Entity, With<PriceElement>>,
 ) {
     if !chart.needs_redraw {
         return;
     }
 
-    // Despawn all existing chart elements
+    // Despawn all existing price elements
     for entity in query.iter() {
         commands.entity(entity).despawn();
     }
@@ -76,7 +76,7 @@ pub fn render_candlesticks(
                 ..default()
             },
             CandlestickWick { candle_index: i },
-            ChartElement,
+            PriceElement,
             PaneId::Price,
         ));
 
@@ -105,7 +105,7 @@ pub fn render_candlesticks(
                 ..default()
             },
             CandlestickBody { candle_index: i },
-            ChartElement,
+            PriceElement,
             PaneId::Price,
         ));
     }
@@ -121,7 +121,7 @@ pub fn render_candlesticks(
 pub fn render_volume_bars(
     mut commands: Commands,
     chart: Res<Chart>,
-    query: Query<Entity, (With<VolumeBar>, With<ChartElement>)>,
+    query: Query<Entity, With<VolumeElement>>,
 ) {
     if !chart.needs_redraw {
         return;
@@ -187,7 +187,7 @@ pub fn render_volume_bars(
                 ..default()
             },
             VolumeBar { candle_index: i },
-            ChartElement,
+            VolumeElement,
             PaneId::Volume,
         ));
     }

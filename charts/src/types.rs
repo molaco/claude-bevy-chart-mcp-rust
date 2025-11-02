@@ -459,6 +459,14 @@ pub struct VolumeBar {
 #[derive(Component)]
 pub struct ChartElement;
 
+/// Marker component for price pane elements (candlestick wicks and bodies)
+#[derive(Component)]
+pub struct PriceElement;
+
+/// Marker component for volume pane elements (volume bars)
+#[derive(Component)]
+pub struct VolumeElement;
+
 /// Marker component for grid elements (lines and labels)
 #[derive(Component)]
 pub struct GridElement;
