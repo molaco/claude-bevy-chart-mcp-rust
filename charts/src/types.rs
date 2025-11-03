@@ -294,8 +294,37 @@ pub struct MovingAverage {
 }
 
 impl MovingAverage {
-    /// Calculate Simple Moving Average
+    /// Calculate Simple Moving Average using sliding window (O(n) complexity)
     pub fn calculate_sma(candles: &[Candle], period: usize) -> Vec<Option<f32>> {
+        let mut values = vec![None; candles.len()];
+
+        if candles.len() < period {
+            return values;
+        }
+
+        // Calculate initial sum for first window [0..period-1]
+        let mut sum: f64 = candles[0..period]
+            .iter()
+            .map(|c| c.close)
+            .sum();
+
+        // Store first SMA value
+        values[period - 1] = Some((sum / period as f64) as f32);
+
+        // Sliding window: for each subsequent candle
+        // Remove oldest value, add newest value
+        for i in period..candles.len() {
+            sum -= candles[i - period].close;  // Remove value leaving window
+            sum += candles[i].close;           // Add value entering window
+            values[i] = Some((sum / period as f64) as f32);
+        }
+
+        values
+    }
+
+    /// Calculate Simple Moving Average (NAIVE - for testing only)
+    #[cfg(test)]
+    pub fn calculate_sma_naive(candles: &[Candle], period: usize) -> Vec<Option<f32>> {
         let mut values = vec![None; candles.len()];
 
         if candles.len() < period {
@@ -646,3 +675,148 @@ pub struct GridElement;
 /// Marker component for crosshair elements
 #[derive(Component)]
 pub struct CrosshairElement;
+
+// ============================================================================
+// TESTS
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn create_test_candles(count: usize) -> Vec<Candle> {
+        (0..count)
+            .map(|i| Candle {
+                time: i as i64 * 1000,
+                open: (i as f64) * 10.0,
+                high: (i as f64) * 10.0 + 5.0,
+                low: (i as f64) * 10.0 - 5.0,
+                close: (i as f64) * 10.0 + 1.0,
+                volume: 1000.0,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn test_sma_sliding_window_matches_naive() {
+        let candles = create_test_candles(1000);
+
+        let sma_new = MovingAverage::calculate_sma(&candles, 20);
+        let sma_old = MovingAverage::calculate_sma_naive(&candles, 20);
+
+        assert_eq!(sma_new.len(), sma_old.len());
+
+        for i in 0..candles.len() {
+            match (sma_new[i], sma_old[i]) {
+                (Some(a), Some(b)) => {
+                    let diff = (a - b).abs();
+                    assert!(
+                        diff < 0.001,
+                        "Mismatch at index {}: new={}, old={}, diff={}",
+                        i, a, b, diff
+                    );
+                }
+                (None, None) => {}
+                _ => panic!("Option mismatch at index {}: new={:?}, old={:?}", i, sma_new[i], sma_old[i]),
+            }
+        }
+    }
+
+    #[test]
+    fn test_sma_different_periods() {
+        let candles = create_test_candles(500);
+
+        for period in [5, 10, 20, 50, 100, 200] {
+            let sma_new = MovingAverage::calculate_sma(&candles, period);
+            let sma_old = MovingAverage::calculate_sma_naive(&candles, period);
+
+            for i in 0..candles.len() {
+                match (sma_new[i], sma_old[i]) {
+                    (Some(a), Some(b)) => {
+                        assert!(
+                            (a - b).abs() < 0.001,
+                            "Period {} mismatch at index {}: {} vs {}",
+                            period, i, a, b
+                        );
+                    }
+                    (None, None) => {}
+                    _ => panic!("Period {} option mismatch at index {}", period, i),
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_sma_edge_case_empty_candles() {
+        let candles: Vec<Candle> = vec![];
+        let result = MovingAverage::calculate_sma(&candles, 20);
+        assert_eq!(result.len(), 0);
+    }
+
+    #[test]
+    fn test_sma_edge_case_insufficient_candles() {
+        let candles = create_test_candles(10);
+        let result = MovingAverage::calculate_sma(&candles, 20);
+        assert_eq!(result.len(), 10);
+        assert!(result.iter().all(|v| v.is_none()));
+    }
+
+    #[test]
+    fn test_sma_edge_case_exact_period() {
+        let candles = create_test_candles(20);
+        let result = MovingAverage::calculate_sma(&candles, 20);
+
+        // First 19 should be None
+        for i in 0..19 {
+            assert!(result[i].is_none(), "Index {} should be None", i);
+        }
+
+        // Index 19 should have a value
+        assert!(result[19].is_some(), "Index 19 should have a value");
+    }
+
+    #[test]
+    fn test_sma_edge_case_period_one() {
+        let candles = create_test_candles(10);
+        let result = MovingAverage::calculate_sma(&candles, 1);
+
+        // All values should equal close prices
+        for i in 0..candles.len() {
+            match result[i] {
+                Some(v) => {
+                    assert_eq!(v, candles[i].close as f32);
+                }
+                None => panic!("Expected value at index {}", i),
+            }
+        }
+    }
+
+    #[test]
+    fn test_sma_numerical_stability() {
+        // Test with large numbers to check floating point stability
+        let candles: Vec<Candle> = (0..100)
+            .map(|i| Candle {
+                time: i,
+                open: 1_000_000.0 + i as f64,
+                high: 1_000_000.0 + i as f64,
+                low: 1_000_000.0 + i as f64,
+                close: 1_000_000.0 + i as f64,
+                volume: 1000.0,
+            })
+            .collect();
+
+        let sma_new = MovingAverage::calculate_sma(&candles, 20);
+        let sma_old = MovingAverage::calculate_sma_naive(&candles, 20);
+
+        for i in 20..candles.len() {
+            if let (Some(a), Some(b)) = (sma_new[i], sma_old[i]) {
+                let relative_error = ((a - b) / b).abs();
+                assert!(
+                    relative_error < 0.00001,
+                    "Numerical instability at {}: {} vs {}, error: {}",
+                    i, a, b, relative_error
+                );
+            }
+        }
+    }
+}
