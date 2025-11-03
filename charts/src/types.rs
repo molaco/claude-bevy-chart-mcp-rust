@@ -230,6 +230,85 @@ pub fn calculate_pane_layouts(panes: &mut [Pane], total_area: Rect, visible_cand
     }
 }
 
+/// Moving Average indicator
+#[derive(Debug, Clone)]
+pub struct MovingAverage {
+    pub period: usize,              // 20, 50, 200
+    pub values: Vec<Option<f32>>,   // Cached MA per candle
+    pub name: String,               // "SMA-20"
+    pub color: Color,               // Line color
+    pub visible: bool,              // Toggle visibility
+}
+
+impl MovingAverage {
+    /// Calculate Simple Moving Average
+    pub fn calculate_sma(candles: &[Candle], period: usize) -> Vec<Option<f32>> {
+        let mut values = vec![None; candles.len()];
+
+        if candles.len() < period {
+            return values;
+        }
+
+        for i in (period - 1)..candles.len() {
+            let sum: f64 = candles[i.saturating_sub(period - 1)..=i]
+                .iter()
+                .map(|c| c.close)
+                .sum();
+            values[i] = Some((sum / period as f64) as f32);
+        }
+
+        values
+    }
+
+    /// Calculate Exponential Moving Average
+    pub fn calculate_ema(candles: &[Candle], period: usize) -> Vec<Option<f32>> {
+        let mut values = vec![None; candles.len()];
+
+        if candles.len() < period {
+            return values;
+        }
+
+        // First value is SMA
+        let sma: f64 = candles[0..period]
+            .iter()
+            .map(|c| c.close)
+            .sum::<f64>() / period as f64;
+        values[period - 1] = Some(sma as f32);
+
+        // Subsequent values use exponential smoothing
+        let multiplier = 2.0 / (period as f64 + 1.0);
+        for i in period..candles.len() {
+            let prev = values[i - 1].unwrap_or(sma as f32);
+            let ema = (candles[i].close as f32 - prev) * multiplier as f32 + prev;
+            values[i] = Some(ema);
+        }
+
+        values
+    }
+
+    /// Create a new SMA indicator
+    pub fn new_sma(candles: &[Candle], period: usize, color: Color) -> Self {
+        Self {
+            period,
+            values: Self::calculate_sma(candles, period),
+            name: format!("SMA-{}", period),
+            color,
+            visible: true,
+        }
+    }
+
+    /// Create a new EMA indicator
+    pub fn new_ema(candles: &[Candle], period: usize, color: Color) -> Self {
+        Self {
+            period,
+            values: Self::calculate_ema(candles, period),
+            name: format!("EMA-{}", period),
+            color,
+            visible: true,
+        }
+    }
+}
+
 /// Main chart resource
 #[derive(Resource)]
 pub struct Chart {
@@ -250,6 +329,9 @@ pub struct Chart {
 
     // Coordinate system (DEPRECATED - use panes instead)
     pub space: ChartSpace,
+
+    // Indicators
+    pub indicators: Vec<MovingAverage>,
 
     // State
     pub needs_redraw: bool,
@@ -491,6 +573,10 @@ pub struct PriceElement;
 /// Marker component for volume pane elements (volume bars)
 #[derive(Component)]
 pub struct VolumeElement;
+
+/// Marker component for indicator elements (MA lines, etc.)
+#[derive(Component)]
+pub struct IndicatorElement;
 
 /// Marker component for grid elements (lines and labels)
 #[derive(Component)]

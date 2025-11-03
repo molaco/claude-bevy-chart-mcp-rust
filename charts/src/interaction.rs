@@ -232,6 +232,20 @@ pub fn check_lazy_load(
                 // Adjust visible_start to maintain view
                 chart.visible_candle_start += new_len;
 
+                // Recalculate all indicators with new data
+                // Collect indicator info first to avoid borrow conflicts
+                let indicator_info: Vec<(String, usize)> = chart.indicators.iter()
+                    .map(|ind| (ind.name.clone(), ind.period))
+                    .collect();
+
+                for (i, (name, period)) in indicator_info.iter().enumerate() {
+                    if name.starts_with("SMA") {
+                        chart.indicators[i].values = MovingAverage::calculate_sma(&chart.candles, *period);
+                    } else if name.starts_with("EMA") {
+                        chart.indicators[i].values = MovingAverage::calculate_ema(&chart.candles, *period);
+                    }
+                }
+
                 chart.needs_redraw = true;
             }
         }
@@ -262,6 +276,21 @@ pub fn check_lazy_load(
             if !new_candles.is_empty() {
                 println!("Lazy loaded {} recent candles", new_candles.len());
                 chart.candles.extend(new_candles);
+
+                // Recalculate all indicators with new data
+                // Collect indicator info first to avoid borrow conflicts
+                let indicator_info: Vec<(String, usize)> = chart.indicators.iter()
+                    .map(|ind| (ind.name.clone(), ind.period))
+                    .collect();
+
+                for (i, (name, period)) in indicator_info.iter().enumerate() {
+                    if name.starts_with("SMA") {
+                        chart.indicators[i].values = MovingAverage::calculate_sma(&chart.candles, *period);
+                    } else if name.starts_with("EMA") {
+                        chart.indicators[i].values = MovingAverage::calculate_ema(&chart.candles, *period);
+                    }
+                }
+
                 chart.needs_redraw = true;
             }
         }

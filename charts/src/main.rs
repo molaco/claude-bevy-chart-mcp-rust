@@ -30,6 +30,7 @@ fn main() {
         .add_systems(Update, check_lazy_load)
         .add_systems(Update, render_grid_and_axes)
         .add_systems(Update, render_candlesticks)
+        .add_systems(Update, render_moving_averages)
         .add_systems(Update, render_volume_bars)
         .run();
 }
@@ -109,6 +110,13 @@ fn setup(mut commands: Commands) {
     // Create deprecated space for backward compatibility (not used in multi-pane)
     let space = ChartSpace::new(total_area, visible_candle_count);
 
+    // Calculate Moving Average indicators
+    let indicators = vec![
+        MovingAverage::new_sma(&candles, 20, Color::srgb(1.0, 0.8, 0.0)),  // Yellow SMA-20
+        MovingAverage::new_sma(&candles, 50, Color::srgb(0.0, 1.0, 1.0)),  // Cyan SMA-50
+        MovingAverage::new_sma(&candles, 200, Color::srgb(1.0, 0.0, 1.0)), // Magenta SMA-200
+    ];
+
     let chart = Chart {
         ticker_id,
         timeframe: timeframe.to_string(),
@@ -119,6 +127,7 @@ fn setup(mut commands: Commands) {
         panes,
         total_area,
         space, // Deprecated
+        indicators,
         needs_redraw: true,
         loading: false,
     };
