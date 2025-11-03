@@ -26,6 +26,7 @@ fn main() {
             handle_mouse_input,
             update_crosshair,
         ).chain())  // Ensures crosshair updates immediately after mouse input
+        .add_systems(Update, toggle_volume_pane)
         .add_systems(Update, check_lazy_load)
         .add_systems(Update, render_grid_and_axes)
         .add_systems(Update, render_candlesticks)
@@ -131,6 +132,7 @@ fn setup(mut commands: Commands) {
     commands.insert_resource(ChartGrid::default());
     commands.insert_resource(ChartAxes::default());
     commands.insert_resource(Crosshair::default());
+    commands.insert_resource(VolumeToggleState::default());
 
-    println!("Setup complete!");
+    println!("Setup complete! Press 'V' to toggle volume pane.");
 }

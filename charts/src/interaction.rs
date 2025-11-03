@@ -269,3 +269,59 @@ pub fn check_lazy_load(
         chart.loading = false;
     }
 }
+
+/// Toggle volume pane visibility with 'V' key
+pub fn toggle_volume_pane(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut toggle_state: ResMut<VolumeToggleState>,
+    mut chart: ResMut<Chart>,
+) {
+    if keys.just_pressed(KeyCode::KeyV) {
+        toggle_state.visible = !toggle_state.visible;
+
+        if toggle_state.visible {
+            // Add volume pane back (if not already present)
+            let has_volume = chart.panes.iter().any(|p| matches!(p.id, PaneId::Volume));
+
+            if !has_volume {
+                // Insert volume pane after price pane
+                let volume_pane = Pane::new(
+                    PaneId::Volume,
+                    PaneType::Volume,
+                    0.3,  // 30% height
+                    Rect::default(),
+                    chart.visible_candle_count,
+                );
+                chart.panes.push(volume_pane);
+
+                // Adjust price pane height to 70%
+                if let Some(price_pane) = chart.panes.iter_mut().find(|p| matches!(p.id, PaneId::Price)) {
+                    price_pane.height_percent = 0.7;
+                }
+
+                println!("Volume pane shown");
+            }
+        } else {
+            // Remove volume pane
+            chart.panes.retain(|p| !matches!(p.id, PaneId::Volume));
+
+            // Give price pane 100% height
+            if let Some(price_pane) = chart.panes.iter_mut().find(|p| matches!(p.id, PaneId::Price)) {
+                price_pane.height_percent = 1.0;
+            }
+
+            println!("Volume pane hidden");
+        }
+
+        // Recalculate pane layouts
+        let total_area = chart.total_area;
+        let visible_candle_count = chart.visible_candle_count;
+        calculate_pane_layouts(&mut chart.panes, total_area, visible_candle_count);
+
+        // Update Y-axis bounds for all panes
+        update_pane_bounds(&mut chart);
+
+        // Trigger redraw
+        chart.needs_redraw = true;
+    }
+}

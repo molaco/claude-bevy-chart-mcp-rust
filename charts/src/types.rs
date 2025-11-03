@@ -375,6 +375,18 @@ pub struct InteractionState {
     pub last_crosshair_candle_index: Option<usize>,
 }
 
+/// Volume pane toggle state
+#[derive(Resource)]
+pub struct VolumeToggleState {
+    pub visible: bool,
+}
+
+impl Default for VolumeToggleState {
+    fn default() -> Self {
+        Self { visible: true }  // Volume pane visible by default
+    }
+}
+
 /// Grid configuration
 #[derive(Resource)]
 pub struct ChartGrid {
