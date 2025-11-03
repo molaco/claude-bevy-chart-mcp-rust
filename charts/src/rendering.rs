@@ -522,9 +522,9 @@ pub fn render_grid_and_axes(
         let line_spacing = 4.0;
         let grip_color = Color::srgba(0.6, 0.6, 0.6, 0.7);
 
-        // Draw 4 horizontal lines
-        for j in 0..4 {
-            let offset = (j as f32 - 1.5) * (line_height + line_spacing);
+        // Draw 2 horizontal lines
+        for j in 0..2 {
+            let offset = (j as f32 - 0.5) * (line_height + line_spacing);
             let line_y = gap_center_y + offset;
 
             commands.spawn((
