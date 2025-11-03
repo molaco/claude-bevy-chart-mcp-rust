@@ -3,6 +3,7 @@ mod rendering;
 mod interaction;
 
 use bevy::prelude::*;
+use bevy::diagnostic::{FrameTimeDiagnosticsPlugin, DiagnosticsStore};
 use types::*;
 use rendering::*;
 use interaction::*;
@@ -21,13 +22,16 @@ fn main() {
             }),
             ..default()
         }))
+        .add_plugins(FrameTimeDiagnosticsPlugin)
         .add_systems(Startup, setup)
+        .add_systems(Startup, setup_fps_counter)
         .add_systems(Update, (
             handle_mouse_input,
             update_crosshair,
         ).chain())  // Ensures crosshair updates immediately after mouse input
         .add_systems(Update, toggle_volume_pane)
         .add_systems(Update, check_lazy_load)
+        .add_systems(Update, update_fps_counter)
         .add_systems(Update, render_grid_and_axes)
         .add_systems(Update, render_candlesticks)
         .add_systems(Update, render_moving_averages)
@@ -149,4 +153,47 @@ fn setup(mut commands: Commands) {
     commands.insert_resource(VolumeToggleState::default());
 
     println!("Setup complete! Press 'V' to toggle volume pane.");
+}
+
+// ============================================================================
+// FPS COUNTER
+// ============================================================================
+
+/// Component to mark the FPS counter text
+#[derive(Component)]
+struct FpsText;
+
+/// Setup FPS counter UI in top-right corner
+fn setup_fps_counter(mut commands: Commands) {
+    commands.spawn((
+        TextBundle::from_section(
+            "FPS: --",
+            TextStyle {
+                font_size: 20.0,
+                color: Color::srgb(0.0, 1.0, 0.0), // Green text
+                ..default()
+            },
+        )
+        .with_style(Style {
+            position_type: PositionType::Absolute,
+            top: Val::Px(10.0),
+            right: Val::Px(10.0),
+            ..default()
+        }),
+        FpsText,
+    ));
+}
+
+/// Update FPS counter text every frame
+fn update_fps_counter(
+    diagnostics: Res<DiagnosticsStore>,
+    mut query: Query<&mut Text, With<FpsText>>,
+) {
+    for mut text in &mut query {
+        if let Some(fps) = diagnostics.get(&FrameTimeDiagnosticsPlugin::FPS) {
+            if let Some(value) = fps.smoothed() {
+                text.sections[0].value = format!("FPS: {:.0}", value);
+            }
+        }
+    }
 }
