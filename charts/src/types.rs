@@ -111,6 +111,59 @@ impl ChartSpace {
         self.recalculate_cache(visible_candle_count);
     }
 
+    /// Fit price bounds to visible candles AND indicator values (Option B)
+    pub fn fit_price_bounds_with_indicators(
+        &mut self,
+        candles: &[Candle],
+        indicators: &[MovingAverage],
+        visible_candle_start: usize,
+        visible_candle_count: usize
+    ) {
+        if candles.is_empty() {
+            return;
+        }
+
+        let start = visible_candle_start;
+        let end = (start + visible_candle_count).min(candles.len());
+
+        if start >= end {
+            return;
+        }
+
+        let visible_candles = &candles[start..end];
+        let mut min_price = f64::MAX;
+        let mut max_price = f64::MIN;
+
+        // Include candle highs and lows
+        for candle in visible_candles {
+            min_price = min_price.min(candle.low);
+            max_price = max_price.max(candle.high);
+        }
+
+        // Include visible indicator values
+        for indicator in indicators {
+            if !indicator.visible {
+                continue;
+            }
+
+            for i in start..end {
+                if let Some(value) = indicator.values.get(i).and_then(|v| *v) {
+                    min_price = min_price.min(value as f64);
+                    max_price = max_price.max(value as f64);
+                }
+            }
+        }
+
+        // Add padding
+        let range = max_price - min_price;
+        let padding = range * self.price_padding as f64;
+
+        self.visible_price_min = (min_price - padding) as f32;
+        self.visible_price_max = (max_price + padding) as f32;
+
+        self.recalculate_cache(visible_candle_count);
+    }
+
     /// Fit volume bounds to visible candles
     pub fn fit_volume_bounds(&mut self, candles: &[Candle], visible_candle_start: usize, visible_candle_count: usize) {
         if candles.is_empty() {
@@ -340,20 +393,28 @@ pub struct Chart {
 
 /// Update Y-axis bounds for all panes based on their type
 pub fn update_pane_bounds(chart: &mut Chart) {
+    // Collect shared data to avoid borrow conflicts
+    let candles = &chart.candles;
+    let indicators = &chart.indicators;
+    let visible_start = chart.visible_candle_start;
+    let visible_count = chart.visible_candle_count;
+
     for pane in chart.panes.iter_mut() {
         match pane.pane_type {
             PaneType::Price => {
-                pane.space.fit_price_bounds(
-                    &chart.candles,
-                    chart.visible_candle_start,
-                    chart.visible_candle_count
+                // Use Option B: expand Y-axis to include indicator values
+                pane.space.fit_price_bounds_with_indicators(
+                    candles,
+                    indicators,
+                    visible_start,
+                    visible_count
                 );
             }
             PaneType::Volume => {
                 pane.space.fit_volume_bounds(
-                    &chart.candles,
-                    chart.visible_candle_start,
-                    chart.visible_candle_count
+                    candles,
+                    visible_start,
+                    visible_count
                 );
             }
             PaneType::Indicator { .. } => {

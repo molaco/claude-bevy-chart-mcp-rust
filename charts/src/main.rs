@@ -94,11 +94,23 @@ fn setup(mut commands: Commands) {
     // Calculate pane layouts
     calculate_pane_layouts(&mut panes, total_area, visible_candle_count);
 
-    // Fit Y-axis bounds for each pane
+    // Calculate Moving Average indicators (before fitting bounds so we can include them)
+    let indicators = vec![
+        MovingAverage::new_sma(&candles, 20, Color::srgb(1.0, 0.8, 0.0)),  // Yellow SMA-20
+        MovingAverage::new_sma(&candles, 50, Color::srgb(0.0, 1.0, 1.0)),  // Cyan SMA-50
+        MovingAverage::new_sma(&candles, 200, Color::srgb(1.0, 0.0, 1.0)), // Magenta SMA-200
+    ];
+
+    // Fit Y-axis bounds for each pane (including indicators for Price pane)
     for pane in panes.iter_mut() {
         match pane.pane_type {
             PaneType::Price => {
-                pane.space.fit_price_bounds(&candles, visible_candle_start, visible_candle_count);
+                pane.space.fit_price_bounds_with_indicators(
+                    &candles,
+                    &indicators,
+                    visible_candle_start,
+                    visible_candle_count
+                );
             }
             PaneType::Volume => {
                 pane.space.fit_volume_bounds(&candles, visible_candle_start, visible_candle_count);
@@ -109,13 +121,6 @@ fn setup(mut commands: Commands) {
 
     // Create deprecated space for backward compatibility (not used in multi-pane)
     let space = ChartSpace::new(total_area, visible_candle_count);
-
-    // Calculate Moving Average indicators
-    let indicators = vec![
-        MovingAverage::new_sma(&candles, 20, Color::srgb(1.0, 0.8, 0.0)),  // Yellow SMA-20
-        MovingAverage::new_sma(&candles, 50, Color::srgb(0.0, 1.0, 1.0)),  // Cyan SMA-50
-        MovingAverage::new_sma(&candles, 200, Color::srgb(1.0, 0.0, 1.0)), // Magenta SMA-200
-    ];
 
     let chart = Chart {
         ticker_id,
