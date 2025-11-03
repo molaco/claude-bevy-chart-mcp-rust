@@ -4,6 +4,7 @@ mod interaction;
 
 use bevy::prelude::*;
 use bevy::diagnostic::{FrameTimeDiagnosticsPlugin, DiagnosticsStore};
+use bevy::window::PresentMode;
 use types::*;
 use rendering::*;
 use interaction::*;
@@ -18,6 +19,7 @@ fn main() {
             primary_window: Some(Window {
                 title: "Bevy Candlestick Chart".to_string(),
                 resolution: (1600.0, 900.0).into(),
+                present_mode: PresentMode::AutoNoVsync, // Disable VSync for uncapped FPS
                 ..default()
             }),
             ..default()
