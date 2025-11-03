@@ -604,9 +604,10 @@ pub fn update_crosshair(
     mut transforms: Query<&mut Transform>,
     mut visibilities: Query<&mut Visibility>,
     mut texts: Query<&mut Text>,
+    mut windows: Query<&mut Window>,
 ) {
     if !crosshair.enabled || chart.panes.is_empty() {
-        // Hide all crosshair elements
+        // Hide all crosshair elements and show cursor
         if let Ok(mut vis) = visibilities.get_mut(crosshair_entities.vertical_line) {
             *vis = Visibility::Hidden;
         }
@@ -626,6 +627,11 @@ pub fn update_crosshair(
         if let Ok(mut vis) = visibilities.get_mut(crosshair_entities.ohlcv_box) {
             *vis = Visibility::Hidden;
         }
+
+        // Show cursor when crosshair disabled
+        for mut window in windows.iter_mut() {
+            window.cursor.visible = true;
+        }
         return;
     }
 
@@ -641,8 +647,19 @@ pub fn update_crosshair(
         pane.space.viewport.contains(interaction.mouse_pos)
     });
 
+    // Show cursor if: outside chart, dragging, or resizing
+    // Hide cursor only when: in chart AND not interacting
+    let should_hide_cursor = mouse_in_chart
+        && !interaction.dragging
+        && interaction.hover_resize_gap.is_none()
+        && interaction.resizing_gap.is_none();
+
+    for mut window in windows.iter_mut() {
+        window.cursor.visible = !should_hide_cursor;
+    }
+
     if !mouse_in_chart {
-        // Hide all elements when mouse is outside chart
+        // Hide all crosshair elements when mouse is outside chart
         if let Ok(mut vis) = visibilities.get_mut(crosshair_entities.vertical_line) {
             *vis = Visibility::Hidden;
         }
