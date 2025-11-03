@@ -220,40 +220,60 @@ pub fn init_crosshair(
     let chart_right = first_pane.space.viewport.max.x;
     let total_height = chart_top - chart_bottom;
 
-    // Spawn vertical line (spans all panes)
-    let vertical_line = commands.spawn((
-        SpriteBundle {
-            sprite: Sprite {
-                color: Color::srgba(1.0, 1.0, 1.0, 0.5),
-                custom_size: Some(Vec2::new(1.0, total_height)),
-                ..default()
-            },
-            transform: Transform::from_translation(Vec3::new(0.0, (chart_top + chart_bottom) / 2.0, 3.0)),
-            visibility: Visibility::Hidden,
-            ..default()
-        },
-        CrosshairElement,
-    )).id();
+    // Dash pattern parameters
+    const DASH_LENGTH: f32 = 8.0;
+    const GAP_LENGTH: f32 = 4.0;
+    const PATTERN_LENGTH: f32 = DASH_LENGTH + GAP_LENGTH;
 
-    // Spawn horizontal lines and price labels (one per pane)
-    for pane in &chart.panes {
-        let viewport = &pane.space.viewport;
+    // Spawn vertical line segments (dashed pattern)
+    let num_segments = (total_height / PATTERN_LENGTH).ceil() as usize;
+    let mut vertical_line_segments = Vec::new();
 
-        // Horizontal line for this pane
-        let h_line = commands.spawn((
+    for i in 0..num_segments {
+        let segment_y = chart_bottom + (i as f32 * PATTERN_LENGTH) + (DASH_LENGTH / 2.0);
+        let segment_id = commands.spawn((
             SpriteBundle {
                 sprite: Sprite {
-                    color: Color::srgba(1.0, 1.0, 1.0, 0.5),
-                    custom_size: Some(Vec2::new(viewport.width(), 1.0)),
+                    color: Color::srgba(1.0, 1.0, 1.0, 0.6),
+                    custom_size: Some(Vec2::new(1.0, DASH_LENGTH)),
                     ..default()
                 },
-                transform: Transform::from_translation(Vec3::new(viewport.center().x, 0.0, 3.0)),
+                transform: Transform::from_translation(Vec3::new(0.0, segment_y, 3.0)),
                 visibility: Visibility::Hidden,
                 ..default()
             },
             CrosshairElement,
         )).id();
-        horizontal_lines.push((pane.id, h_line));
+        vertical_line_segments.push(segment_id);
+    }
+
+    // Spawn horizontal lines and price labels (one per pane)
+    for pane in &chart.panes {
+        let viewport = &pane.space.viewport;
+
+        // Horizontal line segments for this pane (dashed pattern)
+        let pane_width = viewport.width();
+        let num_h_segments = (pane_width / PATTERN_LENGTH).ceil() as usize;
+        let mut h_segments = Vec::new();
+
+        for i in 0..num_h_segments {
+            let segment_x = viewport.min.x + (i as f32 * PATTERN_LENGTH) + (DASH_LENGTH / 2.0);
+            let segment_id = commands.spawn((
+                SpriteBundle {
+                    sprite: Sprite {
+                        color: Color::srgba(1.0, 1.0, 1.0, 0.6),
+                        custom_size: Some(Vec2::new(DASH_LENGTH, 1.0)),
+                        ..default()
+                    },
+                    transform: Transform::from_translation(Vec3::new(segment_x, 0.0, 3.0)),
+                    visibility: Visibility::Hidden,
+                    ..default()
+                },
+                CrosshairElement,
+            )).id();
+            h_segments.push(segment_id);
+        }
+        horizontal_lines.push((pane.id, h_segments));
 
         // Price label for this pane
         let label = commands.spawn((
@@ -320,14 +340,14 @@ pub fn init_crosshair(
 
     // Insert the resource
     commands.insert_resource(CrosshairEntities {
-        vertical_line,
+        vertical_line_segments,
         horizontal_lines,
         price_labels,
         time_label,
         ohlcv_box,
     });
 
-    println!("Initialized persistent crosshair entities");
+    println!("Initialized persistent crosshair entities (dashed pattern)");
 }
 
 pub fn render_grid_and_axes(
@@ -608,12 +628,16 @@ pub fn update_crosshair(
 ) {
     if !crosshair.enabled || chart.panes.is_empty() {
         // Hide all crosshair elements and show cursor
-        if let Ok(mut vis) = visibilities.get_mut(crosshair_entities.vertical_line) {
-            *vis = Visibility::Hidden;
-        }
-        for (_, entity) in &crosshair_entities.horizontal_lines {
-            if let Ok(mut vis) = visibilities.get_mut(*entity) {
+        for segment in &crosshair_entities.vertical_line_segments {
+            if let Ok(mut vis) = visibilities.get_mut(*segment) {
                 *vis = Visibility::Hidden;
+            }
+        }
+        for (_, segments) in &crosshair_entities.horizontal_lines {
+            for segment in segments {
+                if let Ok(mut vis) = visibilities.get_mut(*segment) {
+                    *vis = Visibility::Hidden;
+                }
             }
         }
         for (_, entity) in &crosshair_entities.price_labels {
@@ -660,12 +684,16 @@ pub fn update_crosshair(
 
     if !mouse_in_chart {
         // Hide all crosshair elements when mouse is outside chart
-        if let Ok(mut vis) = visibilities.get_mut(crosshair_entities.vertical_line) {
-            *vis = Visibility::Hidden;
-        }
-        for (_, entity) in &crosshair_entities.horizontal_lines {
-            if let Ok(mut vis) = visibilities.get_mut(*entity) {
+        for segment in &crosshair_entities.vertical_line_segments {
+            if let Ok(mut vis) = visibilities.get_mut(*segment) {
                 *vis = Visibility::Hidden;
+            }
+        }
+        for (_, segments) in &crosshair_entities.horizontal_lines {
+            for segment in segments {
+                if let Ok(mut vis) = visibilities.get_mut(*segment) {
+                    *vis = Visibility::Hidden;
+                }
             }
         }
         for (_, entity) in &crosshair_entities.price_labels {
@@ -685,12 +713,14 @@ pub fn update_crosshair(
     let mouse_x = interaction.mouse_pos.x;
     let mouse_y = interaction.mouse_pos.y;
 
-    // ========== UPDATE VERTICAL CROSSHAIR LINE ==========
-    if let Ok(mut transform) = transforms.get_mut(crosshair_entities.vertical_line) {
-        transform.translation.x = mouse_x;
-    }
-    if let Ok(mut vis) = visibilities.get_mut(crosshair_entities.vertical_line) {
-        *vis = Visibility::Visible;
+    // ========== UPDATE VERTICAL CROSSHAIR LINE SEGMENTS ==========
+    for segment in &crosshair_entities.vertical_line_segments {
+        if let Ok(mut transform) = transforms.get_mut(*segment) {
+            transform.translation.x = mouse_x;
+        }
+        if let Ok(mut vis) = visibilities.get_mut(*segment) {
+            *vis = Visibility::Visible;
+        }
     }
 
     // ========== UPDATE PER-PANE HORIZONTAL LINES & LABELS ==========
@@ -698,22 +728,24 @@ pub fn update_crosshair(
         let viewport = &pane.space.viewport;
 
         // Find entities for this pane
-        let h_line_entity = crosshair_entities.horizontal_lines.iter()
+        let h_line_segments = crosshair_entities.horizontal_lines.iter()
             .find(|(id, _)| *id == pane.id)
-            .map(|(_, e)| *e);
+            .map(|(_, segments)| segments);
         let label_entity = crosshair_entities.price_labels.iter()
             .find(|(id, _)| *id == pane.id)
             .map(|(_, e)| *e);
 
         // Check if mouse Y is within this pane
         if mouse_y >= viewport.min.y && mouse_y <= viewport.max.y {
-            // Update horizontal line position
-            if let Some(entity) = h_line_entity {
-                if let Ok(mut transform) = transforms.get_mut(entity) {
-                    transform.translation.y = mouse_y;
-                }
-                if let Ok(mut vis) = visibilities.get_mut(entity) {
-                    *vis = Visibility::Visible;
+            // Update horizontal line segments position
+            if let Some(segments) = h_line_segments {
+                for segment in segments {
+                    if let Ok(mut transform) = transforms.get_mut(*segment) {
+                        transform.translation.y = mouse_y;
+                    }
+                    if let Ok(mut vis) = visibilities.get_mut(*segment) {
+                        *vis = Visibility::Visible;
+                    }
                 }
             }
 
@@ -743,9 +775,11 @@ pub fn update_crosshair(
             }
         } else {
             // Mouse not in this pane, hide its elements
-            if let Some(entity) = h_line_entity {
-                if let Ok(mut vis) = visibilities.get_mut(entity) {
-                    *vis = Visibility::Hidden;
+            if let Some(segments) = h_line_segments {
+                for segment in segments {
+                    if let Ok(mut vis) = visibilities.get_mut(*segment) {
+                        *vis = Visibility::Hidden;
+                    }
                 }
             }
             if let Some(entity) = label_entity {

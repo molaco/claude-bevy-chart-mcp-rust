@@ -440,8 +440,8 @@ impl Default for Crosshair {
 /// Persistent crosshair entities (created once, updated every frame)
 #[derive(Resource)]
 pub struct CrosshairEntities {
-    pub vertical_line: Entity,
-    pub horizontal_lines: Vec<(PaneId, Entity)>,  // One line per pane
+    pub vertical_line_segments: Vec<Entity>,      // Multiple dashed segments
+    pub horizontal_lines: Vec<(PaneId, Vec<Entity>)>,  // Dashed segments per pane
     pub price_labels: Vec<(PaneId, Entity)>,      // One label per pane
     pub time_label: Entity,
     pub ohlcv_box: Entity,
