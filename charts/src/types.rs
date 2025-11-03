@@ -197,7 +197,7 @@ pub fn calculate_pane_layouts(panes: &mut [Pane], total_area: Rect, visible_cand
         return;
     }
 
-    const SEPARATOR_GAP: f32 = 40.0; // Padding between panes
+    const SEPARATOR_GAP: f32 = 24.0; // Padding between panes
 
     // Calculate total height available after accounting for separators
     let num_separators = panes.len().saturating_sub(1);

@@ -74,7 +74,7 @@ pub fn handle_mouse_input(
         let delta_y = interaction.mouse_pos.y - interaction.drag_start_pos.y;
 
         // Calculate available height (excluding gaps)
-        const SEPARATOR_GAP: f32 = 40.0;
+        const SEPARATOR_GAP: f32 = 24.0;
         let num_gaps = chart.panes.len() - 1;
         let available_height = chart.total_area.height() - (num_gaps as f32 * SEPARATOR_GAP);
 
