@@ -232,17 +232,20 @@ pub fn check_lazy_load(
                 // Adjust visible_start to maintain view
                 chart.visible_candle_start += new_len;
 
-                // Recalculate all indicators with new data
-                // Collect indicator info first to avoid borrow conflicts
-                let indicator_info: Vec<(String, usize)> = chart.indicators.iter()
-                    .map(|ind| (ind.name.clone(), ind.period))
-                    .collect();
+                // INCREMENTAL: Only calculate MA for NEW candles
+                println!("Recalculating indicators for {} new candles (prepend)", new_len);
 
-                for (i, (name, period)) in indicator_info.iter().enumerate() {
-                    if name.starts_with("SMA") {
-                        chart.indicators[i].values = MovingAverage::calculate_sma(&chart.candles, *period);
-                    } else if name.starts_with("EMA") {
-                        chart.indicators[i].values = MovingAverage::calculate_ema(&chart.candles, *period);
+                // Split borrow: borrow candles and indicators separately
+                let candles_ptr = chart.candles.as_slice() as *const [Candle];
+                for indicator in chart.indicators.iter_mut() {
+                    // Safe: we're only reading from candles, not modifying
+                    let candles = unsafe { &*candles_ptr };
+                    if indicator.name.starts_with("SMA") {
+                        indicator.calculate_sma_prepend(candles, new_len);
+                    } else if indicator.name.starts_with("EMA") {
+                        // EMA requires recursive calculation, must recalculate all
+                        println!("Warning: EMA requires full recalculation");
+                        indicator.values = MovingAverage::calculate_ema(candles, indicator.period);
                     }
                 }
 
@@ -275,19 +278,27 @@ pub fn check_lazy_load(
         ) {
             if !new_candles.is_empty() {
                 println!("Lazy loaded {} recent candles", new_candles.len());
+
+                // Store old length before extending
+                let old_len = chart.candles.len();
+
+                // Append new candles
                 chart.candles.extend(new_candles);
 
-                // Recalculate all indicators with new data
-                // Collect indicator info first to avoid borrow conflicts
-                let indicator_info: Vec<(String, usize)> = chart.indicators.iter()
-                    .map(|ind| (ind.name.clone(), ind.period))
-                    .collect();
+                // INCREMENTAL: Only calculate MA for NEW candles
+                println!("Recalculating indicators from index {} (append)", old_len);
 
-                for (i, (name, period)) in indicator_info.iter().enumerate() {
-                    if name.starts_with("SMA") {
-                        chart.indicators[i].values = MovingAverage::calculate_sma(&chart.candles, *period);
-                    } else if name.starts_with("EMA") {
-                        chart.indicators[i].values = MovingAverage::calculate_ema(&chart.candles, *period);
+                // Split borrow: borrow candles and indicators separately
+                let candles_ptr = chart.candles.as_slice() as *const [Candle];
+                for indicator in chart.indicators.iter_mut() {
+                    // Safe: we're only reading from candles, not modifying
+                    let candles = unsafe { &*candles_ptr };
+                    if indicator.name.starts_with("SMA") {
+                        indicator.calculate_sma_append(candles, old_len);
+                    } else if indicator.name.starts_with("EMA") {
+                        // EMA requires recursive calculation, must recalculate all
+                        println!("Warning: EMA requires full recalculation");
+                        indicator.values = MovingAverage::calculate_ema(candles, indicator.period);
                     }
                 }
 

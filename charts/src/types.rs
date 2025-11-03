@@ -342,6 +342,127 @@ impl MovingAverage {
         values
     }
 
+    /// Calculate SMA for NEW candles being appended (scrolling right)
+    /// Only calculates values starting from `old_len` index
+    pub fn calculate_sma_append(&mut self, candles: &[Candle], old_len: usize) {
+        let period = self.period;
+
+        // Ensure values vec is sized correctly
+        if self.values.len() < old_len {
+            self.values.resize(old_len, None);
+        }
+
+        // Calculate MA for new candles starting at old_len
+        for i in old_len..candles.len() {
+            if i < period - 1 {
+                // Not enough data for MA yet
+                self.values.push(None);
+                continue;
+            }
+
+            // Use sliding window if we have a previous MA value
+            if i >= period && i > 0 && self.values.len() > i - 1 {
+                if let Some(prev_ma) = self.values[i - 1] {
+                    // Reconstruct sum from previous MA
+                    let mut sum = prev_ma as f64 * period as f64;
+
+                    // Sliding window: remove oldest, add newest
+                    sum -= candles[i - period].close;
+                    sum += candles[i].close;
+
+                    self.values.push(Some((sum / period as f64) as f32));
+                    continue;
+                }
+            }
+
+            // Fallback: calculate from scratch for this value
+            // (happens at boundary between old and new data)
+            if i >= period - 1 {
+                let sum: f64 = candles[i.saturating_sub(period - 1)..=i]
+                    .iter()
+                    .map(|c| c.close)
+                    .sum();
+                self.values.push(Some((sum / period as f64) as f32));
+            } else {
+                self.values.push(None);
+            }
+        }
+    }
+
+    /// Calculate SMA for NEW candles being prepended (scrolling left into history)
+    /// Calculates values for first `new_count` candles, then prepends to existing values
+    pub fn calculate_sma_prepend(&mut self, candles: &[Candle], new_count: usize) {
+        let period = self.period;
+        let mut new_values = Vec::with_capacity(candles.len());
+
+        // Calculate MA for new candles at the beginning
+        for i in 0..new_count {
+            if i < period - 1 {
+                new_values.push(None);
+                continue;
+            }
+
+            // Calculate from scratch (can't use sliding window going backwards)
+            let sum: f64 = candles[i.saturating_sub(period - 1)..=i]
+                .iter()
+                .map(|c| c.close)
+                .sum();
+            new_values.push(Some((sum / period as f64) as f32));
+        }
+
+        // Recalculate boundary values that now include prepended candles
+        // Need to recalculate up to (period - 1) values after the prepended section
+        let boundary_end = (new_count + period - 1).min(candles.len());
+        for i in new_count..boundary_end {
+            if i < period - 1 {
+                new_values.push(None);
+                continue;
+            }
+
+            let sum: f64 = candles[i.saturating_sub(period - 1)..=i]
+                .iter()
+                .map(|c| c.close)
+                .sum();
+            new_values.push(Some((sum / period as f64) as f32));
+        }
+
+        // Append remaining old values that don't need recalculation
+        if boundary_end < candles.len() {
+            let remaining_old_values_start = boundary_end - new_count;
+            new_values.extend_from_slice(&self.values[remaining_old_values_start..]);
+        }
+
+        self.values = new_values;
+    }
+
+    /// Recalculate a specific range of MA values (for boundary corrections)
+    pub fn recalculate_range(&mut self, candles: &[Candle], start: usize, end: usize) {
+        let period = self.period;
+        let end = end.min(candles.len());
+
+        for i in start..end {
+            if i < period - 1 {
+                if i < self.values.len() {
+                    self.values[i] = None;
+                }
+                continue;
+            }
+
+            let sum: f64 = candles[i.saturating_sub(period - 1)..=i]
+                .iter()
+                .map(|c| c.close)
+                .sum();
+
+            let value = Some((sum / period as f64) as f32);
+
+            if i < self.values.len() {
+                self.values[i] = value;
+            } else {
+                self.values.push(value);
+            }
+        }
+    }
+
     /// Calculate Exponential Moving Average
     pub fn calculate_ema(candles: &[Candle], period: usize) -> Vec<Option<f32>> {
         let mut values = vec![None; candles.len()];
@@ -816,6 +937,175 @@ mod tests {
                     "Numerical instability at {}: {} vs {}, error: {}",
                     i, a, b, relative_error
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn test_sma_append_incremental() {
+        // Create initial dataset
+        let mut candles = create_test_candles(1000);
+
+        // Calculate full SMA
+        let mut ma_incremental = MovingAverage::new_sma(&candles, 20, Color::srgb(1.0, 1.0, 1.0));
+        let full_reference = ma_incremental.values.clone();
+
+        // Add more candles
+        let old_len = candles.len();
+        candles.extend(create_test_candles(100).iter().map(|c| Candle {
+            time: c.time + old_len as i64 * 1000,
+            open: c.open + old_len as f64 * 10.0,
+            high: c.high + old_len as f64 * 10.0,
+            low: c.low + old_len as f64 * 10.0,
+            close: c.close + old_len as f64 * 10.0,
+            volume: c.volume,
+        }));
+
+        // Calculate incrementally
+        ma_incremental.calculate_sma_append(&candles, old_len);
+
+        // Calculate from scratch for comparison
+        let ma_full = MovingAverage::calculate_sma(&candles, 20);
+
+        // Verify old values unchanged
+        for i in 0..old_len {
+            match (ma_incremental.values[i], full_reference[i]) {
+                (Some(a), Some(b)) => {
+                    assert_eq!(a, b, "Old value changed at index {}", i);
+                }
+                (None, None) => {}
+                _ => panic!("Old value changed at index {}", i),
+            }
+        }
+
+        // Verify new values match full calculation
+        for i in old_len..candles.len() {
+            match (ma_incremental.values[i], ma_full[i]) {
+                (Some(a), Some(b)) => {
+                    assert!(
+                        (a - b).abs() < 0.001,
+                        "New value mismatch at index {}: {} vs {}",
+                        i, a, b
+                    );
+                }
+                (None, None) => {}
+                _ => panic!("New value mismatch at index {}", i),
+            }
+        }
+    }
+
+    #[test]
+    fn test_sma_prepend_incremental() {
+        // Create initial dataset starting at index 100
+        let candles_old = create_test_candles(100)
+            .iter()
+            .map(|c| Candle {
+                time: c.time + 100_000,
+                open: c.open + 1000.0,
+                high: c.high + 1000.0,
+                low: c.low + 1000.0,
+                close: c.close + 1000.0,
+                volume: c.volume,
+            })
+            .collect::<Vec<_>>();
+
+        // Calculate SMA for old data
+        let mut ma_incremental = MovingAverage::new_sma(&candles_old, 20, Color::srgb(1.0, 1.0, 1.0));
+
+        // Create full dataset (new + old)
+        let mut candles_full = create_test_candles(100);
+        candles_full.extend(candles_old);
+
+        // Calculate incrementally (prepend)
+        ma_incremental.calculate_sma_prepend(&candles_full, 100);
+
+        // Calculate from scratch for comparison
+        let ma_full = MovingAverage::calculate_sma(&candles_full, 20);
+
+        // Verify entire result matches
+        assert_eq!(ma_incremental.values.len(), ma_full.len());
+
+        for i in 0..candles_full.len() {
+            match (ma_incremental.values[i], ma_full[i]) {
+                (Some(a), Some(b)) => {
+                    assert!(
+                        (a - b).abs() < 0.001,
+                        "Mismatch at index {}: {} vs {}",
+                        i, a, b
+                    );
+                }
+                (None, None) => {}
+                _ => panic!("Option mismatch at index {}", i),
+            }
+        }
+    }
+
+    #[test]
+    fn test_sma_append_boundary_conditions() {
+        let mut candles = create_test_candles(50);
+        let mut ma = MovingAverage::new_sma(&candles, 20, Color::srgb(1.0, 1.0, 1.0));
+
+        // Append just 1 candle
+        let old_len = candles.len();
+        candles.push(Candle {
+            time: 50000,
+            open: 500.0,
+            high: 505.0,
+            low: 495.0,
+            close: 501.0,
+            volume: 1000.0,
+        });
+
+        ma.calculate_sma_append(&candles, old_len);
+
+        // Should have exactly one new value
+        assert_eq!(ma.values.len(), 51);
+        assert!(ma.values[50].is_some());
+    }
+
+    #[test]
+    fn test_sma_prepend_insufficient_period() {
+        // Create candles where new data doesn't have enough for period
+        let candles_old = create_test_candles(100);
+        let mut ma = MovingAverage::new_sma(&candles_old, 50, Color::srgb(1.0, 1.0, 1.0));
+
+        // Prepend only 10 candles (not enough for period=50)
+        let mut candles_full = create_test_candles(10);
+        candles_full.extend(candles_old);
+
+        ma.calculate_sma_prepend(&candles_full, 10);
+
+        // First 10 values should be None (not enough for period)
+        for i in 0..10 {
+            assert!(ma.values[i].is_none(), "Index {} should be None", i);
+        }
+    }
+
+    #[test]
+    fn test_sma_append_different_periods() {
+        // Test incremental append with various periods
+        for period in [20, 50, 100] {
+            let mut candles = create_test_candles(500);
+            let mut ma = MovingAverage::new_sma(&candles, period, Color::srgb(1.0, 1.0, 1.0));
+
+            let old_len = candles.len();
+            candles.extend(create_test_candles(100));
+
+            ma.calculate_sma_append(&candles, old_len);
+            let ma_full = MovingAverage::calculate_sma(&candles, period);
+
+            for i in old_len..candles.len() {
+                match (ma.values[i], ma_full[i]) {
+                    (Some(a), Some(b)) => {
+                        assert!(
+                            (a - b).abs() < 0.001,
+                            "Period {} mismatch at {}: {} vs {}",
+                            period, i, a, b
+                        );
+                    }
+                    (None, None) => {}
+                    _ => panic!("Period {} option mismatch at {}", period, i),
+                }
             }
         }
     }
