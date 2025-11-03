@@ -600,7 +600,7 @@ pub fn update_crosshair(
     crosshair_entities: Res<CrosshairEntities>,
     chart: Res<Chart>,
     crosshair: Res<Crosshair>,
-    interaction: Res<InteractionState>,
+    mut interaction: ResMut<InteractionState>,
     mut transforms: Query<&mut Transform>,
     mut visibilities: Query<&mut Visibility>,
     mut texts: Query<&mut Text>,
@@ -754,20 +754,44 @@ pub fn update_crosshair(
         if let Ok(mut vis) = visibilities.get_mut(crosshair_entities.ohlcv_box) {
             *vis = Visibility::Hidden;
         }
+        interaction.last_crosshair_candle_index = None;
         return;
     }
 
-    let candle = &chart.candles[candle_index];
+    // ========== DEBOUNCE: Only update text if candle changed ==========
+    let candle_changed = interaction.last_crosshair_candle_index != Some(candle_index);
 
-    // ========== UPDATE TIME LABEL ==========
-    if crosshair.show_time_label {
-        let datetime = DateTime::<Utc>::from_timestamp(candle.time / 1000, 0)
-            .unwrap_or_default();
-        let label_text = datetime.format("%m/%d %H:%M").to_string();
+    if candle_changed {
+        interaction.last_crosshair_candle_index = Some(candle_index);
+        let candle = &chart.candles[candle_index];
 
-        if let Ok(mut text) = texts.get_mut(crosshair_entities.time_label) {
-            text.sections[0].value = label_text;
+        // ========== UPDATE TIME LABEL (only when candle changes) ==========
+        if crosshair.show_time_label {
+            let datetime = DateTime::<Utc>::from_timestamp(candle.time / 1000, 0)
+                .unwrap_or_default();
+            let label_text = datetime.format("%m/%d %H:%M").to_string();
+
+            if let Ok(mut text) = texts.get_mut(crosshair_entities.time_label) {
+                text.sections[0].value = label_text;
+            }
         }
+
+        // ========== UPDATE OHLCV INFO BOX (only when candle changes) ==========
+        if crosshair.show_ohlcv_box {
+            let info_text = format!(
+                "O: {:.2}  H: {:.2}  L: {:.2}  C: {:.2}\nVol: {:.2}",
+                candle.open, candle.high, candle.low, candle.close, candle.volume
+            );
+
+            if let Ok(mut text) = texts.get_mut(crosshair_entities.ohlcv_box) {
+                text.sections[0].value = info_text;
+            }
+        }
+    }
+
+    // ========== UPDATE POSITIONS & VISIBILITY (every frame) ==========
+    // Time label position
+    if crosshair.show_time_label {
         if let Ok(mut transform) = transforms.get_mut(crosshair_entities.time_label) {
             transform.translation.x = mouse_x;
         }
@@ -780,16 +804,8 @@ pub fn update_crosshair(
         }
     }
 
-    // ========== UPDATE OHLCV INFO BOX ==========
+    // OHLCV box visibility
     if crosshair.show_ohlcv_box {
-        let info_text = format!(
-            "O: {:.2}  H: {:.2}  L: {:.2}  C: {:.2}\nVol: {:.2}",
-            candle.open, candle.high, candle.low, candle.close, candle.volume
-        );
-
-        if let Ok(mut text) = texts.get_mut(crosshair_entities.ohlcv_box) {
-            text.sections[0].value = info_text;
-        }
         if let Ok(mut vis) = visibilities.get_mut(crosshair_entities.ohlcv_box) {
             *vis = Visibility::Visible;
         }

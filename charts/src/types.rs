@@ -370,6 +370,9 @@ pub struct InteractionState {
     pub hover_resize_gap: Option<usize>,    // Which gap is being hovered
     pub resizing_gap: Option<usize>,        // Which gap is being dragged
     pub resize_start_heights: Vec<f32>,     // Original height_percent values
+
+    // Crosshair optimization: track last candle to debounce text updates
+    pub last_crosshair_candle_index: Option<usize>,
 }
 
 /// Grid configuration
