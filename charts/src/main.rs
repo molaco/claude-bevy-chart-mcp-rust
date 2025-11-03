@@ -34,10 +34,13 @@ fn main() {
         .add_systems(Update, toggle_volume_pane)
         .add_systems(Update, check_lazy_load)
         .add_systems(Update, update_fps_counter)
-        .add_systems(Update, render_grid_and_axes)
-        .add_systems(Update, render_candlesticks)
-        .add_systems(Update, render_moving_averages)
-        .add_systems(Update, render_volume_bars)
+        .add_systems(Update, (
+            render_grid_and_axes,
+            render_candlesticks,
+            render_moving_averages,
+            render_volume_bars,
+            reset_redraw_flag,
+        ).chain())  // Run rendering systems in sequence, then reset flag
         .run();
 }
 
@@ -155,6 +158,18 @@ fn setup(mut commands: Commands) {
     commands.insert_resource(VolumeToggleState::default());
 
     println!("Setup complete! Press 'V' to toggle volume pane.");
+}
+
+// ============================================================================
+// RENDERING CONTROL
+// ============================================================================
+
+/// Reset the redraw flag after all rendering systems have completed
+/// This prevents unnecessary entity despawn/spawn on every frame
+fn reset_redraw_flag(mut chart: ResMut<Chart>) {
+    if chart.needs_redraw {
+        chart.needs_redraw = false;
+    }
 }
 
 // ============================================================================
