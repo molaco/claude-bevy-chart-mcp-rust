@@ -868,19 +868,9 @@ pub fn update_crosshair(
 }
 
 pub fn render_moving_averages(
-    mut commands: Commands,
+    mut gizmos: Gizmos,
     chart: Res<Chart>,
-    query: Query<Entity, With<IndicatorElement>>,
 ) {
-    if !chart.needs_redraw {
-        return;
-    }
-
-    // Despawn all existing indicator elements
-    for entity in query.iter() {
-        commands.entity(entity).despawn();
-    }
-
     // Find the Price pane (indicators overlay on price)
     let price_pane = chart.panes.iter()
         .find(|p| matches!(p.id, PaneId::Price));
@@ -898,13 +888,13 @@ pub fn render_moving_averages(
         return;
     }
 
-    // Render each Moving Average
+    // Render each Moving Average using Gizmos for smooth continuous lines
     for ma in &chart.indicators {
         if !ma.visible || ma.values.is_empty() {
             continue;
         }
 
-        // Draw line connecting MA points
+        // Draw continuous line connecting MA points
         for i in start..(end - 1) {
             // Need both current and next values to draw a line segment
             if let (Some(curr_value), Some(next_value)) = (ma.values[i], ma.values.get(i + 1).and_then(|v| *v)) {
@@ -923,42 +913,9 @@ pub fn render_moving_averages(
                     chart.visible_candle_count,
                 );
 
-                // Calculate line segment properties
-                let line_center = (curr_pos + next_pos) / 2.0;
-                let line_length = curr_pos.distance(next_pos);
-                let line_angle = (next_pos.y - curr_pos.y).atan2(next_pos.x - curr_pos.x);
-
-                // Spawn line segment sprite (Z=2, above candlesticks which are Z=0-1)
-                commands.spawn((
-                    SpriteBundle {
-                        sprite: Sprite {
-                            color: ma.color,
-                            custom_size: Some(Vec2::new(line_length, 2.0)), // 2px thick line
-                            ..default()
-                        },
-                        transform: Transform {
-                            translation: line_center.extend(2.0),
-                            rotation: Quat::from_rotation_z(line_angle),
-                            ..default()
-                        },
-                        ..default()
-                    },
-                    IndicatorElement,
-                    PaneId::Price,
-                ));
+                // Draw line segment with Gizmos (no gaps or artifacts!)
+                gizmos.line_2d(curr_pos, next_pos, ma.color);
             }
-        }
-    }
-
-    if !chart.indicators.is_empty() {
-        let visible_count = chart.indicators.iter().filter(|ma| ma.visible).count();
-        if visible_count > 0 {
-            println!(
-                "Rendered {} moving averages (indices {}-{})",
-                visible_count,
-                start,
-                end - 1
-            );
         }
     }
 }
