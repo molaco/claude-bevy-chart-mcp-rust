@@ -9,15 +9,13 @@ use crate::types::*;
 pub fn render_candlesticks(
     mut commands: Commands,
     chart: Res<Chart>,
-    query: Query<Entity, With<PriceElement>>,
+    mut persistent: ResMut<PersistentCandlestickEntities>,
+    mut transforms: Query<&mut Transform>,
+    mut sprites: Query<&mut Sprite>,
+    mut visibilities: Query<&mut Visibility>,
 ) {
     if !chart.needs_redraw {
         return;
-    }
-
-    // Despawn all existing price elements
-    for entity in query.iter() {
-        commands.entity(entity).despawn();
     }
 
     // Find the Price pane
@@ -37,99 +35,107 @@ pub fn render_candlesticks(
         return;
     }
 
-    for i in start..end {
-        let candle = &chart.candles[i];
+    let visible_count = end - start;
 
-        // Calculate positions using ChartSpace::to_world() with shared X-axis params
-        let wick_bottom = price_pane.space.to_world(
-            i, candle.low as f32,
-            chart.visible_candle_start, chart.visible_candle_count
-        );
-        let wick_top = price_pane.space.to_world(
-            i, candle.high as f32,
-            chart.visible_candle_start, chart.visible_candle_count
-        );
-        let body_open = price_pane.space.to_world(
-            i, candle.open as f32,
-            chart.visible_candle_start, chart.visible_candle_count
-        );
-        let body_close = price_pane.space.to_world(
-            i, candle.close as f32,
-            chart.visible_candle_start, chart.visible_candle_count
-        );
+    // Ensure we have enough entities (dynamic growth)
+    persistent.ensure_capacity(&mut commands, visible_count);
 
-        let wick_center = Vec2::new(
-            (wick_bottom.x + wick_top.x) / 2.0,
-            (wick_bottom.y + wick_top.y) / 2.0,
-        );
-        let wick_height = (wick_top.y - wick_bottom.y).abs().max(1.0);
+    // Update each entity in the pool
+    for pool_idx in 0..persistent.wicks.len() {
+        let wick_entity = persistent.wicks[pool_idx];
+        let body_entity = persistent.bodies[pool_idx];
 
-        // Spawn wick entity (thin line, Z=0)
-        commands.spawn((
-            SpriteBundle {
-                sprite: Sprite {
-                    color: Color::srgb(0.5, 0.5, 0.5),
-                    custom_size: Some(Vec2::new(1.0, wick_height)),
-                    ..default()
-                },
-                transform: Transform::from_translation(wick_center.extend(0.0)),
-                ..default()
-            },
-            CandlestickWick { candle_index: i },
-            PriceElement,
-            PaneId::Price,
-        ));
+        if pool_idx < visible_count {
+            // This entity represents a visible candle
+            let candle_idx = start + pool_idx;
+            let candle = &chart.candles[candle_idx];
 
-        // Spawn body entity (rectangle, Z=1 above wick)
-        let body_width = price_pane.space.candle_width_px * 0.7;
-        let body_height = (body_close.y - body_open.y).abs().max(1.0);
-        let body_center = Vec2::new(
-            (body_open.x + body_close.x) / 2.0,
-            (body_open.y + body_close.y) / 2.0,
-        );
+            // Calculate positions
+            let wick_bottom = price_pane.space.to_world(
+                candle_idx, candle.low as f32,
+                chart.visible_candle_start, chart.visible_candle_count
+            );
+            let wick_top = price_pane.space.to_world(
+                candle_idx, candle.high as f32,
+                chart.visible_candle_start, chart.visible_candle_count
+            );
+            let body_open = price_pane.space.to_world(
+                candle_idx, candle.open as f32,
+                chart.visible_candle_start, chart.visible_candle_count
+            );
+            let body_close = price_pane.space.to_world(
+                candle_idx, candle.close as f32,
+                chart.visible_candle_start, chart.visible_candle_count
+            );
 
-        let body_color = if candle.close >= candle.open {
-            Color::srgb(0.0, 0.8, 0.2)  // Green
+            // === UPDATE WICK ===
+            let wick_center = Vec2::new(
+                (wick_bottom.x + wick_top.x) / 2.0,
+                (wick_bottom.y + wick_top.y) / 2.0,
+            );
+            let wick_height = (wick_top.y - wick_bottom.y).abs().max(1.0);
+
+            if let Ok(mut transform) = transforms.get_mut(wick_entity) {
+                transform.translation = wick_center.extend(0.0);
+            }
+
+            if let Ok(mut sprite) = sprites.get_mut(wick_entity) {
+                sprite.custom_size = Some(Vec2::new(1.0, wick_height));
+            }
+
+            if let Ok(mut vis) = visibilities.get_mut(wick_entity) {
+                *vis = Visibility::Visible;
+            }
+
+            // === UPDATE BODY ===
+            let body_width = price_pane.space.candle_width_px * 0.7;
+            let body_height = (body_close.y - body_open.y).abs().max(1.0);
+            let body_center = Vec2::new(
+                (body_open.x + body_close.x) / 2.0,
+                (body_open.y + body_close.y) / 2.0,
+            );
+
+            let body_color = if candle.close >= candle.open {
+                Color::srgb(0.0, 0.8, 0.2)  // Green
+            } else {
+                Color::srgb(0.9, 0.2, 0.2)  // Red
+            };
+
+            if let Ok(mut transform) = transforms.get_mut(body_entity) {
+                transform.translation = body_center.extend(1.0);
+            }
+
+            if let Ok(mut sprite) = sprites.get_mut(body_entity) {
+                sprite.custom_size = Some(Vec2::new(body_width, body_height));
+                sprite.color = body_color;
+            }
+
+            if let Ok(mut vis) = visibilities.get_mut(body_entity) {
+                *vis = Visibility::Visible;
+            }
+
         } else {
-            Color::srgb(0.9, 0.2, 0.2)  // Red
-        };
-
-        commands.spawn((
-            SpriteBundle {
-                sprite: Sprite {
-                    color: body_color,
-                    custom_size: Some(Vec2::new(body_width, body_height)),
-                    ..default()
-                },
-                transform: Transform::from_translation(body_center.extend(1.0)),
-                ..default()
-            },
-            CandlestickBody { candle_index: i },
-            PriceElement,
-            PaneId::Price,
-        ));
+            // This entity is beyond visible range - hide it
+            if let Ok(mut vis) = visibilities.get_mut(wick_entity) {
+                *vis = Visibility::Hidden;
+            }
+            if let Ok(mut vis) = visibilities.get_mut(body_entity) {
+                *vis = Visibility::Hidden;
+            }
+        }
     }
-
-    println!(
-        "Rendered {} candles (indices {}-{})",
-        end - start,
-        start,
-        end - 1
-    );
 }
 
 pub fn render_volume_bars(
     mut commands: Commands,
     chart: Res<Chart>,
-    query: Query<Entity, With<VolumeElement>>,
+    mut persistent: ResMut<PersistentVolumeEntities>,
+    mut transforms: Query<&mut Transform>,
+    mut sprites: Query<&mut Sprite>,
+    mut visibilities: Query<&mut Visibility>,
 ) {
     if !chart.needs_redraw {
         return;
-    }
-
-    // Despawn all existing volume bars
-    for entity in query.iter() {
-        commands.entity(entity).despawn();
     }
 
     // Find the Volume pane
@@ -137,6 +143,12 @@ pub fn render_volume_bars(
         .find(|p| matches!(p.id, PaneId::Volume));
 
     if volume_pane.is_none() {
+        // No volume pane - hide all volume entities
+        for &bar_entity in &persistent.bars {
+            if let Ok(mut vis) = visibilities.get_mut(bar_entity) {
+                *vis = Visibility::Hidden;
+            }
+        }
         return;
     }
     let volume_pane = volume_pane.unwrap();
@@ -149,55 +161,67 @@ pub fn render_volume_bars(
         return;
     }
 
-    for i in start..end {
-        let candle = &chart.candles[i];
+    let visible_count = end - start;
 
-        // Calculate bottom (0) and top (volume) positions
-        let bar_bottom = volume_pane.space.to_world(
-            i, 0.0,
-            chart.visible_candle_start, chart.visible_candle_count
-        );
-        let bar_top = volume_pane.space.to_world(
-            i, candle.volume as f32,
-            chart.visible_candle_start, chart.visible_candle_count
-        );
+    // Ensure we have enough entities (dynamic growth)
+    persistent.ensure_capacity(&mut commands, visible_count);
 
-        let bar_center = Vec2::new(
-            (bar_bottom.x + bar_top.x) / 2.0,
-            (bar_bottom.y + bar_top.y) / 2.0,
-        );
-        let bar_height = (bar_top.y - bar_bottom.y).abs().max(1.0);
-        let bar_width = volume_pane.space.candle_width_px * 0.7;
+    // Update each entity in the pool
+    for pool_idx in 0..persistent.bars.len() {
+        let bar_entity = persistent.bars[pool_idx];
 
-        // Color based on candle direction
-        let bar_color = if candle.close >= candle.open {
-            Color::srgba(0.0, 0.8, 0.2, 0.6)  // Green with transparency
+        if pool_idx < visible_count {
+            // This entity represents a visible volume bar
+            let candle_idx = start + pool_idx;
+            let candle = &chart.candles[candle_idx];
+
+            // Calculate positions
+            let bar_bottom = volume_pane.space.to_world(
+                candle_idx, 0.0,
+                chart.visible_candle_start, chart.visible_candle_count
+            );
+            let bar_top = volume_pane.space.to_world(
+                candle_idx, candle.volume as f32,
+                chart.visible_candle_start, chart.visible_candle_count
+            );
+
+            let bar_center = Vec2::new(
+                (bar_bottom.x + bar_top.x) / 2.0,
+                (bar_bottom.y + bar_top.y) / 2.0,
+            );
+            let bar_height = (bar_top.y - bar_bottom.y).abs().max(1.0);
+            let bar_width = volume_pane.space.candle_width_px * 0.7;
+
+            // Color based on candle direction
+            let bar_color = if candle.close >= candle.open {
+                Color::srgba(0.0, 0.8, 0.2, 0.6)  // Green with transparency
+            } else {
+                Color::srgba(0.9, 0.2, 0.2, 0.6)  // Red with transparency
+            };
+
+            // Update transform
+            if let Ok(mut transform) = transforms.get_mut(bar_entity) {
+                transform.translation = bar_center.extend(0.0);
+            }
+
+            // Update sprite
+            if let Ok(mut sprite) = sprites.get_mut(bar_entity) {
+                sprite.custom_size = Some(Vec2::new(bar_width, bar_height));
+                sprite.color = bar_color;
+            }
+
+            // Make visible
+            if let Ok(mut vis) = visibilities.get_mut(bar_entity) {
+                *vis = Visibility::Visible;
+            }
+
         } else {
-            Color::srgba(0.9, 0.2, 0.2, 0.6)  // Red with transparency
-        };
-
-        commands.spawn((
-            SpriteBundle {
-                sprite: Sprite {
-                    color: bar_color,
-                    custom_size: Some(Vec2::new(bar_width, bar_height)),
-                    ..default()
-                },
-                transform: Transform::from_translation(bar_center.extend(0.0)),
-                ..default()
-            },
-            VolumeBar { candle_index: i },
-            VolumeElement,
-            PaneId::Volume,
-        ));
+            // This entity is beyond visible range - hide it
+            if let Ok(mut vis) = visibilities.get_mut(bar_entity) {
+                *vis = Visibility::Hidden;
+            }
+        }
     }
-
-    println!(
-        "Rendered {} volume bars (indices {}-{})",
-        end - start,
-        start,
-        end - 1
-    );
 }
 
 /// Initialize persistent crosshair entities (called once at startup from setup)

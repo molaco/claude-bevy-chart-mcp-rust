@@ -149,8 +149,14 @@ fn setup(mut commands: Commands) {
     // Initialize persistent crosshair entities (needs chart reference)
     init_crosshair(&mut commands, &chart);
 
+    // Initialize persistent candlestick and volume entities (dynamic pooling)
+    let candlestick_entities = PersistentCandlestickEntities::new();
+    let volume_entities = PersistentVolumeEntities::new();
+
     commands.insert_resource(db);
     commands.insert_resource(chart);
+    commands.insert_resource(candlestick_entities);
+    commands.insert_resource(volume_entities);
     commands.insert_resource(InteractionState::default());
     commands.insert_resource(ChartGrid::default());
     commands.insert_resource(ChartAxes::default());
@@ -158,6 +164,7 @@ fn setup(mut commands: Commands) {
     commands.insert_resource(VolumeToggleState::default());
 
     println!("Setup complete! Press 'V' to toggle volume pane.");
+    println!("Using dynamic entity pooling for candlesticks and volume bars.");
 }
 
 // ============================================================================
