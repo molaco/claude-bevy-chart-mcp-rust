@@ -32,6 +32,7 @@ fn main() {
             update_crosshair,
         ).chain())  // Ensures crosshair updates immediately after mouse input
         .add_systems(Update, toggle_volume_pane)
+        .add_systems(Update, toggle_sma_indicators)
         .add_systems(Update, check_lazy_load)
         .add_systems(Update, update_fps_counter)
         .add_systems(Update, (

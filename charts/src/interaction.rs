@@ -367,3 +367,64 @@ pub fn toggle_volume_pane(
         chart.needs_redraw = true;
     }
 }
+
+/// Toggle SMA indicator visibility with number keys
+/// Keys: 1 = SMA-20, 2 = SMA-50, 3 = SMA-200, S = Toggle all SMAs
+pub fn toggle_sma_indicators(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut chart: ResMut<Chart>,
+) {
+    let mut toggled = false;
+
+    // Toggle individual SMAs with number keys
+    if keys.just_pressed(KeyCode::Digit1) {
+        // Toggle SMA-20 (first indicator)
+        if let Some(sma) = chart.indicators.get_mut(0) {
+            sma.visible = !sma.visible;
+            println!("SMA-{} {}", sma.period, if sma.visible { "shown" } else { "hidden" });
+            toggled = true;
+        }
+    }
+
+    if keys.just_pressed(KeyCode::Digit2) {
+        // Toggle SMA-50 (second indicator)
+        if let Some(sma) = chart.indicators.get_mut(1) {
+            sma.visible = !sma.visible;
+            println!("SMA-{} {}", sma.period, if sma.visible { "shown" } else { "hidden" });
+            toggled = true;
+        }
+    }
+
+    if keys.just_pressed(KeyCode::Digit3) {
+        // Toggle SMA-200 (third indicator)
+        if let Some(sma) = chart.indicators.get_mut(2) {
+            sma.visible = !sma.visible;
+            println!("SMA-{} {}", sma.period, if sma.visible { "shown" } else { "hidden" });
+            toggled = true;
+        }
+    }
+
+    // Toggle all SMAs with 'S' key
+    if keys.just_pressed(KeyCode::KeyS) {
+        // Check if any SMA is visible
+        let any_visible = chart.indicators.iter().any(|ma| ma.visible);
+
+        // Toggle all to opposite state
+        let new_state = !any_visible;
+        for ma in chart.indicators.iter_mut() {
+            ma.visible = new_state;
+        }
+
+        println!("All SMAs {}", if new_state { "shown" } else { "hidden" });
+        toggled = true;
+    }
+
+    // If any toggle occurred, update bounds and trigger redraw
+    if toggled {
+        // Update Y-axis bounds (will respect new visibility state)
+        update_pane_bounds(&mut chart);
+
+        // Trigger redraw
+        chart.needs_redraw = true;
+    }
+}
