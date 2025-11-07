@@ -5,6 +5,7 @@ mod interaction;
 use bevy::prelude::*;
 use bevy::diagnostic::{FrameTimeDiagnosticsPlugin, DiagnosticsStore};
 use bevy::window::PresentMode;
+use bevy::render::view::window::screenshot::ScreenshotManager;
 use types::*;
 use rendering::*;
 use interaction::*;
@@ -34,6 +35,7 @@ fn main() {
         .add_systems(Update, toggle_volume_pane)
         .add_systems(Update, toggle_sma_indicators)
         .add_systems(Update, check_lazy_load)
+        .add_systems(Update, screenshot_on_keypress)
         .add_systems(Update, update_fps_counter)
         .add_systems(Update, (
             render_grid_and_axes,
@@ -158,8 +160,9 @@ fn setup(mut commands: Commands) {
     commands.insert_resource(ChartAxes::default());
     commands.insert_resource(Crosshair::default());
     commands.insert_resource(VolumeToggleState::default());
+    commands.insert_resource(ScreenshotCounter::default());
 
-    println!("Setup complete! Press 'V' to toggle volume pane.");
+    println!("Setup complete! Press 'V' to toggle volume pane, 'F' to take screenshot.");
 }
 
 // ============================================================================
@@ -171,6 +174,35 @@ fn setup(mut commands: Commands) {
 fn reset_redraw_flag(mut chart: ResMut<Chart>) {
     if chart.needs_redraw {
         chart.needs_redraw = false;
+    }
+}
+
+// ============================================================================
+// SCREENSHOT
+// ============================================================================
+
+/// Resource to track screenshot counter for incremental filenames
+#[derive(Resource, Default)]
+struct ScreenshotCounter(u32);
+
+/// System to capture screenshots when F is pressed
+fn screenshot_on_keypress(
+    input: Res<ButtonInput<KeyCode>>,
+    mut screenshot_manager: ResMut<ScreenshotManager>,
+    mut counter: ResMut<ScreenshotCounter>,
+    primary_window: Query<Entity, With<Window>>,
+) {
+    if input.just_pressed(KeyCode::KeyF) {
+        let filename = format!("screenshot-{:04}.png", counter.0);
+        counter.0 += 1;
+
+        println!("📸 Taking screenshot: {}", filename);
+
+        if let Ok(window_entity) = primary_window.get_single() {
+            screenshot_manager
+                .save_screenshot_to_disk(window_entity, filename)
+                .unwrap_or_else(|e| eprintln!("Failed to take screenshot: {}", e));
+        }
     }
 }
 
