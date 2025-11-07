@@ -541,6 +541,13 @@ pub struct Chart {
     pub loading: bool,                 // True when fetching more data
 }
 
+/// Calculate number of "virtual candles" worth of space to add on the right edge
+/// This creates empty space when viewing the latest/newest candles
+/// Returns approximately 1/3 of the visible candle count
+pub fn right_spacing_candles(visible_candle_count: usize) -> usize {
+    visible_candle_count / 3
+}
+
 /// Update Y-axis bounds for all panes based on their type
 pub fn update_pane_bounds(chart: &mut Chart) {
     // Collect shared data to avoid borrow conflicts

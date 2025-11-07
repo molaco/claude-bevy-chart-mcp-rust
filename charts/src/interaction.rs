@@ -135,8 +135,9 @@ pub fn handle_mouse_input(
         if candles_moved != 0 {
             // Update shared X-axis state
             let new_start = (chart.visible_candle_start as i32 + candles_moved).max(0) as usize;
+            let spacing = right_spacing_candles(chart.visible_candle_count);
             chart.visible_candle_start = new_start.min(
-                chart.candles.len().saturating_sub(chart.visible_candle_count)
+                (chart.candles.len() + spacing).saturating_sub(chart.visible_candle_count)
             );
 
             // Update Y-axis bounds for all panes
@@ -167,9 +168,10 @@ pub fn handle_mouse_input(
             let focus_offset = focus_candle.saturating_sub(chart.visible_candle_start);
             let focus_percent = focus_offset as f32 / old_count as f32;
 
+            let spacing = right_spacing_candles(new_count);
             chart.visible_candle_start = focus_candle
                 .saturating_sub((new_count as f32 * focus_percent) as usize)
-                .min(chart.candles.len().saturating_sub(new_count));
+                .min((chart.candles.len() + spacing).saturating_sub(new_count));
             chart.visible_candle_count = new_count;
 
             // Update Y-axis bounds for all panes

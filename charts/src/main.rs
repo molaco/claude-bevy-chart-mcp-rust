@@ -80,7 +80,8 @@ fn setup(mut commands: Commands) {
     );
 
     let visible_candle_count = 50.min(candles.len());
-    let visible_candle_start = candles.len().saturating_sub(visible_candle_count);
+    let spacing = right_spacing_candles(visible_candle_count);
+    let visible_candle_start = (candles.len() + spacing).saturating_sub(visible_candle_count);
 
     // Initialize multi-pane layout: 70% Price + 30% Volume
     let mut panes = vec![
