@@ -183,8 +183,9 @@ impl ChartSpace {
             .max_by(|a, b| a.partial_cmp(b).unwrap())
             .unwrap_or(1.0);
 
+        // Add 12% top padding so volume bars don't touch the pane ceiling
         self.visible_price_min = 0.0;
-        self.visible_price_max = max_volume as f32;
+        self.visible_price_max = (max_volume * 1.12) as f32;
 
         self.recalculate_cache(visible_candle_count);
     }

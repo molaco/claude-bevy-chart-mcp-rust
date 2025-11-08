@@ -5,6 +5,23 @@ use chrono::{DateTime, Utc};
 use crate::types::*;
 
 // ============================================================================
+// HELPER FUNCTIONS
+// ============================================================================
+
+/// Format volume numbers with K/M/B suffixes
+fn format_volume(value: f32) -> String {
+    if value >= 1_000_000_000.0 {
+        format!("{:.2}B", value / 1_000_000_000.0)
+    } else if value >= 1_000_000.0 {
+        format!("{:.2}M", value / 1_000_000.0)
+    } else if value >= 1_000.0 {
+        format!("{:.2}K", value / 1_000.0)
+    } else {
+        format!("{:.2}", value)
+    }
+}
+
+// ============================================================================
 // RENDERING SYSTEMS
 // ============================================================================
 
@@ -354,8 +371,24 @@ pub fn render_grid_and_axes(
     for pane in &chart.panes {
         let viewport = &pane.space.viewport;
 
+        // For volume panes, calculate render height ratio (before 12% padding)
+        let render_height_ratio = match pane.pane_type {
+            PaneType::Volume => {
+                // visible_price_max = actual_max * 1.12
+                // Grid lines should only go up to actual_max / visible_price_max = 1/1.12
+                1.0 / 1.12
+            },
+            _ => 1.0
+        };
+
         for i in 0..=grid.y_tick_count {
             let value_percent = i as f32 / grid.y_tick_count as f32;
+
+            // For volume panes, don't render grid lines above the actual data range
+            if value_percent > render_height_ratio {
+                continue;
+            }
+
             let value = pane.space.visible_price_min +
                 value_percent * (pane.space.visible_price_max - pane.space.visible_price_min);
 
@@ -378,7 +411,12 @@ pub fn render_grid_and_axes(
             // Y-axis label on the right side
             if axes.show_y_labels {
                 let label_x = chart_right + 50.0;
-                let label_text = format!("{:.2}", value);
+
+                // Format based on pane type
+                let label_text = match pane.pane_type {
+                    PaneType::Volume => format_volume(value / 1.12),
+                    _ => format!("{:.2}", value)
+                };
 
                 commands.spawn((
                     Text2d::new(label_text),
