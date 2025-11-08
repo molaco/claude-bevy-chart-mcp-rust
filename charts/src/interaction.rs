@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 use bevy::input::mouse::MouseWheel;
+use bevy::window::{CursorIcon, SystemCursorIcon};
 use crate::types::*;
 
 // ============================================================================
@@ -10,10 +11,10 @@ pub fn handle_mouse_input(
     mut chart: ResMut<Chart>,
     mut interaction: ResMut<InteractionState>,
     mouse_button: Res<ButtonInput<MouseButton>>,
-    mut mouse_wheel: EventReader<MouseWheel>,
-    mut window_query: Query<&mut Window>,
+    mut mouse_wheel: MessageReader<MouseWheel>,
+    mut window_query: Query<(&mut Window, &mut CursorIcon)>,
 ) {
-    let Ok(mut window) = window_query.get_single_mut() else {
+    let Ok((mut window, mut cursor_icon)) = window_query.single_mut() else {
         return;
     };
 
@@ -45,9 +46,9 @@ pub fn handle_mouse_input(
 
     // Change cursor when hovering gap
     if interaction.hover_resize_gap.is_some() || interaction.resizing_gap.is_some() {
-        window.cursor.icon = CursorIcon::NsResize;
+        *cursor_icon = CursorIcon::System(SystemCursorIcon::NsResize);
     } else {
-        window.cursor.icon = CursorIcon::Default;
+        *cursor_icon = CursorIcon::default();
     }
 
     // ========== PANE RESIZE: Start/Stop ==========
@@ -65,7 +66,7 @@ pub fn handle_mouse_input(
     if mouse_button.just_released(MouseButton::Left) {
         if interaction.resizing_gap.is_some() {
             interaction.resizing_gap = None;
-            window.cursor.icon = CursorIcon::Default;
+            *cursor_icon = CursorIcon::default();
         }
     }
 

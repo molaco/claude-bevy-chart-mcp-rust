@@ -1,4 +1,6 @@
 use bevy::prelude::*;
+use bevy::sprite::Anchor;
+use bevy::window::CursorOptions;
 use chrono::{DateTime, Utc};
 use crate::types::*;
 
@@ -66,15 +68,12 @@ pub fn render_candlesticks(
 
         // Spawn wick entity (thin line, Z=0)
         commands.spawn((
-            SpriteBundle {
-                sprite: Sprite {
-                    color: Color::srgb(0.5, 0.5, 0.5),
-                    custom_size: Some(Vec2::new(1.0, wick_height)),
-                    ..default()
-                },
-                transform: Transform::from_translation(wick_center.extend(0.0)),
+            Sprite {
+                color: Color::srgb(0.5, 0.5, 0.5),
+                custom_size: Some(Vec2::new(1.0, wick_height)),
                 ..default()
             },
+            Transform::from_translation(wick_center.extend(0.0)),
             CandlestickWick { candle_index: i },
             PriceElement,
             PaneId::Price,
@@ -95,15 +94,12 @@ pub fn render_candlesticks(
         };
 
         commands.spawn((
-            SpriteBundle {
-                sprite: Sprite {
-                    color: body_color,
-                    custom_size: Some(Vec2::new(body_width, body_height)),
-                    ..default()
-                },
-                transform: Transform::from_translation(body_center.extend(1.0)),
+            Sprite {
+                color: body_color,
+                custom_size: Some(Vec2::new(body_width, body_height)),
                 ..default()
             },
+            Transform::from_translation(body_center.extend(1.0)),
             CandlestickBody { candle_index: i },
             PriceElement,
             PaneId::Price,
@@ -177,15 +173,12 @@ pub fn render_volume_bars(
         };
 
         commands.spawn((
-            SpriteBundle {
-                sprite: Sprite {
+            Sprite {
                     color: bar_color,
                     custom_size: Some(Vec2::new(bar_width, bar_height)),
                     ..default()
                 },
-                transform: Transform::from_translation(bar_center.extend(0.0)),
-                ..default()
-            },
+            Transform::from_translation(bar_center.extend(0.0)),
             VolumeBar { candle_index: i },
             VolumeElement,
             PaneId::Volume,
@@ -232,16 +225,13 @@ pub fn init_crosshair(
     for i in 0..num_segments {
         let segment_y = chart_bottom + (i as f32 * PATTERN_LENGTH) + (DASH_LENGTH / 2.0);
         let segment_id = commands.spawn((
-            SpriteBundle {
-                sprite: Sprite {
-                    color: Color::srgba(1.0, 1.0, 1.0, 0.6),
-                    custom_size: Some(Vec2::new(1.0, DASH_LENGTH)),
-                    ..default()
-                },
-                transform: Transform::from_translation(Vec3::new(0.0, segment_y, 3.0)),
-                visibility: Visibility::Hidden,
+            Sprite {
+                color: Color::srgba(1.0, 1.0, 1.0, 0.6),
+                custom_size: Some(Vec2::new(1.0, DASH_LENGTH)),
                 ..default()
             },
+            Transform::from_translation(Vec3::new(0.0, segment_y, 3.0)),
+            Visibility::Hidden,
             CrosshairElement,
         )).id();
         vertical_line_segments.push(segment_id);
@@ -259,16 +249,13 @@ pub fn init_crosshair(
         for i in 0..num_h_segments {
             let segment_x = viewport.min.x + (i as f32 * PATTERN_LENGTH) + (DASH_LENGTH / 2.0);
             let segment_id = commands.spawn((
-                SpriteBundle {
-                    sprite: Sprite {
-                        color: Color::srgba(1.0, 1.0, 1.0, 0.6),
-                        custom_size: Some(Vec2::new(DASH_LENGTH, 1.0)),
-                        ..default()
-                    },
-                    transform: Transform::from_translation(Vec3::new(segment_x, 0.0, 3.0)),
-                    visibility: Visibility::Hidden,
+                Sprite {
+                    color: Color::srgba(1.0, 1.0, 1.0, 0.6),
+                    custom_size: Some(Vec2::new(DASH_LENGTH, 1.0)),
                     ..default()
                 },
+                Transform::from_translation(Vec3::new(segment_x, 0.0, 3.0)),
+                Visibility::Hidden,
                 CrosshairElement,
             )).id();
             h_segments.push(segment_id);
@@ -277,20 +264,15 @@ pub fn init_crosshair(
 
         // Price label for this pane
         let label = commands.spawn((
-            Text2dBundle {
-                text: Text::from_section(
-                    "",
-                    TextStyle {
-                        font_size: 14.0,
-                        color: Color::srgb(1.0, 1.0, 0.0),
-                        ..default()
-                    },
-                ),
-                transform: Transform::from_translation(Vec3::new(chart_right + 50.0, 0.0, 4.0)),
-                text_anchor: bevy::sprite::Anchor::CenterLeft,
-                visibility: Visibility::Hidden,
+            Text2d::new(""),
+            TextFont {
+                font_size: 14.0,
                 ..default()
             },
+            TextColor(Color::srgb(1.0, 1.0, 0.0)),
+            Anchor::CENTER_LEFT,
+            Transform::from_translation(Vec3::new(chart_right + 50.0, 0.0, 4.0)),
+            Visibility::Hidden,
             CrosshairElement,
         )).id();
         price_labels.push((pane.id, label));
@@ -298,43 +280,33 @@ pub fn init_crosshair(
 
     // Spawn time label
     let time_label = commands.spawn((
-        Text2dBundle {
-            text: Text::from_section(
-                "",
-                TextStyle {
-                    font_size: 14.0,
-                    color: Color::srgb(1.0, 1.0, 0.0),
-                    ..default()
-                },
-            ),
-            transform: Transform::from_translation(Vec3::new(0.0, chart_bottom - 40.0, 4.0)),
-            text_anchor: bevy::sprite::Anchor::Center,
-            visibility: Visibility::Hidden,
+        Text2d::new(""),
+        TextFont {
+            font_size: 14.0,
             ..default()
         },
+        TextColor(Color::srgb(1.0, 1.0, 0.0)),
+        Anchor::CENTER,
+        Transform::from_translation(Vec3::new(0.0, chart_bottom - 40.0, 4.0)),
+        Visibility::Hidden,
         CrosshairElement,
     )).id();
 
     // Spawn OHLCV info box
     let ohlcv_box = commands.spawn((
-        Text2dBundle {
-            text: Text::from_section(
-                "",
-                TextStyle {
-                    font_size: 16.0,
-                    color: Color::srgb(1.0, 1.0, 1.0),
-                    ..default()
-                },
-            ),
-            transform: Transform::from_translation(Vec3::new(
-                first_pane.space.viewport.min.x + 100.0,
-                first_pane.space.viewport.max.y - 40.0,
-                4.0
-            )),
-            text_anchor: bevy::sprite::Anchor::TopLeft,
-            visibility: Visibility::Hidden,
+        Text2d::new(""),
+        TextFont {
+            font_size: 16.0,
             ..default()
         },
+        TextColor(Color::srgb(1.0, 1.0, 1.0)),
+        Anchor::TOP_LEFT,
+        Transform::from_translation(Vec3::new(
+            first_pane.space.viewport.min.x + 100.0,
+            first_pane.space.viewport.max.y - 40.0,
+            4.0
+        )),
+        Visibility::Hidden,
         CrosshairElement,
     )).id();
 
@@ -394,15 +366,12 @@ pub fn render_grid_and_axes(
             let line_width = chart_right - chart_left;
 
             commands.spawn((
-                SpriteBundle {
-                    sprite: Sprite {
+                Sprite {
                         color: grid.grid_color,
                         custom_size: Some(Vec2::new(line_width, 1.0)),
                         ..default()
                     },
-                    transform: Transform::from_translation(line_center.extend(-1.0)),
-                    ..default()
-                },
+            Transform::from_translation(line_center.extend(-1.0)),
                 GridElement,
             ));
 
@@ -412,19 +381,14 @@ pub fn render_grid_and_axes(
                 let label_text = format!("{:.2}", value);
 
                 commands.spawn((
-                    Text2dBundle {
-                        text: Text::from_section(
-                            label_text,
-                            TextStyle {
-                                font_size: axes.label_size,
-                                color: axes.label_color,
-                                ..default()
-                            },
-                        ),
-                        transform: Transform::from_translation(Vec3::new(label_x, y, 2.0)),
-                        text_anchor: bevy::sprite::Anchor::CenterLeft,
+                    Text2d::new(label_text),
+                    TextFont {
+                        font_size: axes.label_size,
                         ..default()
                     },
+                    TextColor(axes.label_color),
+                    Anchor::CENTER_LEFT,
+                    Transform::from_translation(Vec3::new(label_x, y, 2.0)),
                     GridElement,
                 ));
             }
@@ -439,73 +403,61 @@ pub fn render_grid_and_axes(
 
         // Top border
         commands.spawn((
-            SpriteBundle {
-                sprite: Sprite {
-                    color: border_color,
-                    custom_size: Some(Vec2::new(viewport.width(), border_thickness)),
-                    ..default()
-                },
-                transform: Transform::from_translation(Vec3::new(
-                    viewport.center().x,
-                    viewport.max.y,
-                    0.4,
-                )),
+            Sprite {
+                color: border_color,
+                custom_size: Some(Vec2::new(viewport.width(), border_thickness)),
                 ..default()
             },
+            Transform::from_translation(Vec3::new(
+                viewport.center().x,
+                viewport.max.y,
+                0.4,
+            )),
             GridElement,
         ));
 
         // Bottom border
         commands.spawn((
-            SpriteBundle {
-                sprite: Sprite {
-                    color: border_color,
-                    custom_size: Some(Vec2::new(viewport.width(), border_thickness)),
-                    ..default()
-                },
-                transform: Transform::from_translation(Vec3::new(
-                    viewport.center().x,
-                    viewport.min.y,
-                    0.4,
-                )),
+            Sprite {
+                color: border_color,
+                custom_size: Some(Vec2::new(viewport.width(), border_thickness)),
                 ..default()
             },
+            Transform::from_translation(Vec3::new(
+                viewport.center().x,
+                viewport.min.y,
+                0.4,
+            )),
             GridElement,
         ));
 
         // Left border
         commands.spawn((
-            SpriteBundle {
-                sprite: Sprite {
-                    color: border_color,
-                    custom_size: Some(Vec2::new(border_thickness, viewport.height())),
-                    ..default()
-                },
-                transform: Transform::from_translation(Vec3::new(
-                    viewport.min.x,
-                    viewport.center().y,
-                    0.4,
-                )),
+            Sprite {
+                color: border_color,
+                custom_size: Some(Vec2::new(border_thickness, viewport.height())),
                 ..default()
             },
+            Transform::from_translation(Vec3::new(
+                viewport.min.x,
+                viewport.center().y,
+                0.4,
+            )),
             GridElement,
         ));
 
         // Right border
         commands.spawn((
-            SpriteBundle {
-                sprite: Sprite {
-                    color: border_color,
-                    custom_size: Some(Vec2::new(border_thickness, viewport.height())),
-                    ..default()
-                },
-                transform: Transform::from_translation(Vec3::new(
-                    viewport.max.x,
-                    viewport.center().y,
-                    0.4,
-                )),
+            Sprite {
+                color: border_color,
+                custom_size: Some(Vec2::new(border_thickness, viewport.height())),
                 ..default()
             },
+            Transform::from_translation(Vec3::new(
+                viewport.max.x,
+                viewport.center().y,
+                0.4,
+            )),
             GridElement,
         ));
     }
@@ -528,15 +480,12 @@ pub fn render_grid_and_axes(
             let line_y = gap_center_y + offset;
 
             commands.spawn((
-                SpriteBundle {
-                    sprite: Sprite {
-                        color: grip_color,
-                        custom_size: Some(Vec2::new(grip_width, line_height)),
-                        ..default()
-                    },
-                    transform: Transform::from_translation(Vec3::new(gap_center_x, line_y, 0.6)),
+                Sprite {
+                    color: grip_color,
+                    custom_size: Some(Vec2::new(grip_width, line_height)),
                     ..default()
                 },
+                Transform::from_translation(Vec3::new(gap_center_x, line_y, 0.6)),
                 GridElement,
             ));
         }
@@ -562,15 +511,12 @@ pub fn render_grid_and_axes(
             let line_height = viewport.height();
 
             commands.spawn((
-                SpriteBundle {
-                    sprite: Sprite {
+                Sprite {
                         color: grid.grid_color,
                         custom_size: Some(Vec2::new(1.0, line_height)),
                         ..default()
                     },
-                    transform: Transform::from_translation(line_center.extend(-1.0)),
-                    ..default()
-                },
+            Transform::from_translation(line_center.extend(-1.0)),
                 GridElement,
             ));
         }
@@ -597,19 +543,14 @@ pub fn render_grid_and_axes(
             let label_text = datetime.format("%m/%d %H:%M").to_string();
 
             commands.spawn((
-                Text2dBundle {
-                    text: Text::from_section(
-                        label_text,
-                        TextStyle {
-                            font_size: axes.label_size,
-                            color: axes.label_color,
-                            ..default()
-                        },
-                    ),
-                    transform: Transform::from_translation(Vec3::new(x, label_y, 2.0)),
-                    text_anchor: bevy::sprite::Anchor::Center,
+                Text2d::new(label_text),
+                TextFont {
+                    font_size: axes.label_size,
                     ..default()
                 },
+                TextColor(axes.label_color),
+                Anchor::CENTER,
+                Transform::from_translation(Vec3::new(x, label_y, 2.0)),
                 GridElement,
             ));
         }
@@ -624,7 +565,7 @@ pub fn update_crosshair(
     mut transforms: Query<&mut Transform>,
     mut visibilities: Query<&mut Visibility>,
     mut texts: Query<&mut Text>,
-    mut windows: Query<&mut Window>,
+    mut cursor_options: Query<&mut CursorOptions, With<Window>>,
 ) {
     if !crosshair.enabled || chart.panes.is_empty() {
         // Hide all crosshair elements and show cursor
@@ -653,8 +594,8 @@ pub fn update_crosshair(
         }
 
         // Show cursor when crosshair disabled
-        for mut window in windows.iter_mut() {
-            window.cursor.visible = true;
+        for mut opts in cursor_options.iter_mut() {
+            opts.visible = true;
         }
         return;
     }
@@ -678,8 +619,8 @@ pub fn update_crosshair(
         && interaction.hover_resize_gap.is_none()
         && interaction.resizing_gap.is_none();
 
-    for mut window in windows.iter_mut() {
-        window.cursor.visible = !should_hide_cursor;
+    for mut opts in cursor_options.iter_mut() {
+        opts.visible = !should_hide_cursor;
     }
 
     if !mouse_in_chart {
@@ -759,7 +700,7 @@ pub fn update_crosshair(
                     );
 
                     if let Ok(mut text) = texts.get_mut(entity) {
-                        text.sections[0].value = format!("{:.2}", value_at_cursor);
+                        text.0 = format!("{:.2}", value_at_cursor);
                     }
                     if let Ok(mut transform) = transforms.get_mut(entity) {
                         transform.translation.y = mouse_y;
@@ -823,7 +764,7 @@ pub fn update_crosshair(
             let label_text = datetime.format("%m/%d %H:%M").to_string();
 
             if let Ok(mut text) = texts.get_mut(crosshair_entities.time_label) {
-                text.sections[0].value = label_text;
+                text.0 = label_text;
             }
         }
 
@@ -835,7 +776,7 @@ pub fn update_crosshair(
             );
 
             if let Ok(mut text) = texts.get_mut(crosshair_entities.ohlcv_box) {
-                text.sections[0].value = info_text;
+                text.0 = info_text;
             }
         }
     }

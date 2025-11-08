@@ -5,7 +5,8 @@ mod interaction;
 use bevy::prelude::*;
 use bevy::diagnostic::{FrameTimeDiagnosticsPlugin, DiagnosticsStore};
 use bevy::window::PresentMode;
-use bevy::render::view::window::screenshot::ScreenshotManager;
+use bevy::render::view::screenshot::{save_to_disk, Screenshot};
+use bevy::camera::Camera2d;
 use types::*;
 use rendering::*;
 use interaction::*;
@@ -19,13 +20,13 @@ fn main() {
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: "Bevy Candlestick Chart".to_string(),
-                resolution: (1600.0, 900.0).into(),
+                resolution: (1600, 900).into(),
                 present_mode: PresentMode::AutoNoVsync, // Disable VSync for uncapped FPS
                 ..default()
             }),
             ..default()
         }))
-        .add_plugins(FrameTimeDiagnosticsPlugin)
+        .add_plugins(FrameTimeDiagnosticsPlugin::default())
         .add_systems(Startup, setup)
         .add_systems(Startup, setup_fps_counter)
         .add_systems(Update, (
@@ -51,9 +52,14 @@ fn main() {
 // SETUP
 // ============================================================================
 
-fn setup(mut commands: Commands) {
+fn setup(mut commands: Commands, window_query: Query<Entity, With<Window>>) {
     // Spawn camera
-    commands.spawn(Camera2dBundle::default());
+    commands.spawn(Camera2d);
+
+    // Initialize CursorIcon component on window (required in Bevy 0.17)
+    if let Ok(window_entity) = window_query.single() {
+        commands.entity(window_entity).insert(bevy::window::CursorIcon::default());
+    }
 
     // Initialize database connection
     let db_path = "/home/molaco/.local/share/flowsurface/flowsurface.duckdb";
@@ -187,10 +193,9 @@ struct ScreenshotCounter(u32);
 
 /// System to capture screenshots when F is pressed
 fn screenshot_on_keypress(
+    mut commands: Commands,
     input: Res<ButtonInput<KeyCode>>,
-    mut screenshot_manager: ResMut<ScreenshotManager>,
     mut counter: ResMut<ScreenshotCounter>,
-    primary_window: Query<Entity, With<Window>>,
 ) {
     if input.just_pressed(KeyCode::KeyF) {
         let filename = format!("screenshot-{:04}.png", counter.0);
@@ -198,11 +203,9 @@ fn screenshot_on_keypress(
 
         println!("📸 Taking screenshot: {}", filename);
 
-        if let Ok(window_entity) = primary_window.get_single() {
-            screenshot_manager
-                .save_screenshot_to_disk(window_entity, filename)
-                .unwrap_or_else(|e| eprintln!("Failed to take screenshot: {}", e));
-        }
+        commands
+            .spawn(Screenshot::primary_window())
+            .observe(save_to_disk(filename));
     }
 }
 
@@ -217,20 +220,18 @@ struct FpsText;
 /// Setup FPS counter UI in top-right corner
 fn setup_fps_counter(mut commands: Commands) {
     commands.spawn((
-        TextBundle::from_section(
-            "FPS: --",
-            TextStyle {
-                font_size: 20.0,
-                color: Color::srgb(0.0, 1.0, 0.0), // Green text
-                ..default()
-            },
-        )
-        .with_style(Style {
+        Text::new("FPS: --"),
+        TextFont {
+            font_size: 20.0,
+            ..default()
+        },
+        TextColor(Color::srgb(0.0, 1.0, 0.0)), // Green text
+        Node {
             position_type: PositionType::Absolute,
             top: Val::Px(10.0),
             right: Val::Px(10.0),
             ..default()
-        }),
+        },
         FpsText,
     ));
 }
@@ -243,7 +244,7 @@ fn update_fps_counter(
     for mut text in &mut query {
         if let Some(fps) = diagnostics.get(&FrameTimeDiagnosticsPlugin::FPS) {
             if let Some(value) = fps.smoothed() {
-                text.sections[0].value = format!("FPS: {:.0}", value);
+                text.0 = format!("FPS: {:.0}", value);
             }
         }
     }
