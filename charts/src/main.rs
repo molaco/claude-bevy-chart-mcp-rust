@@ -7,6 +7,7 @@ use bevy::diagnostic::{FrameTimeDiagnosticsPlugin, DiagnosticsStore};
 use bevy::window::PresentMode;
 use bevy::render::view::screenshot::{save_to_disk, Screenshot};
 use bevy::camera::Camera2d;
+use bevy::remote::RemotePlugin;
 use types::*;
 use rendering::*;
 use interaction::*;
@@ -27,6 +28,7 @@ fn main() {
             ..default()
         }))
         .add_plugins(FrameTimeDiagnosticsPlugin::default())
+        .add_plugins(RemotePlugin::default())  // Enable Bevy Remote Protocol for MCP integration
         .add_systems(Startup, setup)
         .add_systems(Startup, setup_fps_counter)
         .add_systems(Update, (
