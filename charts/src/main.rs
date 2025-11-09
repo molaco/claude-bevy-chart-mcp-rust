@@ -1,16 +1,19 @@
 mod types;
 mod rendering;
 mod interaction;
+mod screenshot;
 
 use bevy::prelude::*;
 use bevy::diagnostic::{FrameTimeDiagnosticsPlugin, DiagnosticsStore};
 use bevy::window::PresentMode;
-use bevy::render::view::screenshot::{save_to_disk, Screenshot};
 use bevy::camera::Camera2d;
-use bevy::remote::RemotePlugin;
+use bevy::remote::{RemotePlugin, BrpResult, BrpError};
+use bevy::remote::http::RemoteHttpPlugin;
+use serde_json::Value;
 use types::*;
 use rendering::*;
 use interaction::*;
+use screenshot::take_screenshot;
 
 // ============================================================================
 // MAIN
@@ -28,7 +31,9 @@ fn main() {
             ..default()
         }))
         .add_plugins(FrameTimeDiagnosticsPlugin::default())
-        .add_plugins(RemotePlugin::default())  // Enable Bevy Remote Protocol for MCP integration
+        .add_plugins(RemotePlugin::default()
+            .with_method("chart/screenshot", handle_screenshot))  // Enable Bevy Remote Protocol for MCP integration
+        .add_plugins(RemoteHttpPlugin::default())  // Enable HTTP transport on port 15702
         .add_systems(Startup, setup)
         .add_systems(Startup, setup_fps_counter)
         .add_systems(Update, (
@@ -200,15 +205,28 @@ fn screenshot_on_keypress(
     mut counter: ResMut<ScreenshotCounter>,
 ) {
     if input.just_pressed(KeyCode::KeyF) {
-        let filename = format!("screenshot-{:04}.png", counter.0);
-        counter.0 += 1;
-
-        println!("📸 Taking screenshot: {}", filename);
-
-        commands
-            .spawn(Screenshot::primary_window())
-            .observe(save_to_disk(filename));
+        take_screenshot(&mut commands, None, &mut counter.0);
     }
+}
+
+/// BRP handler for taking screenshots remotely
+fn handle_screenshot(
+    In(params): In<Option<Value>>,
+    mut commands: Commands,
+    mut counter: Local<u32>,
+) -> BrpResult {
+    let path_param = params
+        .as_ref()
+        .and_then(|p| p.get("path"))
+        .and_then(|p| p.as_str())
+        .map(String::from);
+
+    let path = take_screenshot(&mut commands, path_param, &mut counter);
+
+    Ok(serde_json::json!({
+        "success": true,
+        "path": path
+    }))
 }
 
 // ============================================================================

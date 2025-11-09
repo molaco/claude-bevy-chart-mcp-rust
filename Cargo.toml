@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["charts"]
+members = ["chart-mcp","charts"]
 
 [workspace.package]
 version = "0.1.0"
