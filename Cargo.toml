@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["chart-mcp","charts"]
+members = ["chart-mcp","charts","chat-ui","claude-agent-sdk-rust"]
 
 [workspace.package]
 version = "0.1.0"

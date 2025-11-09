@@ -1,0 +1,42 @@
+[package]
+name = "chat-ui"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+bevy = { version = "0.17.2", default-features = false, features = [
+    "bevy_winit",
+    "bevy_render",
+    "bevy_core_pipeline",
+    "bevy_sprite",
+    "bevy_sprite_render",
+    "bevy_text",
+    "bevy_ui",
+    "bevy_ui_render",
+    "bevy_gizmos",
+    "bevy_remote",
+    "default_font",
+    "png",
+    "wayland",
+    "x11",
+] }
+
+# duckdb = "1.1"
+# chrono = "0.4"
+# serde_json = "1.0"
+
+bevy_ui_text_input = "0.6"
+
+# Claude SDK for AI chat
+claude-agent-sdk = { path = "../claude-agent-sdk-rust" }
+tokio = { version = "1", features = ["full"] }
+futures = "0.3"
+bevy-tokio-tasks = "0.17"
+
+[[example]]
+name = "simple"
+path = "examples/simple.rs"
+
+[[example]]
+name = "full"
+path = "examples/full.rs"
