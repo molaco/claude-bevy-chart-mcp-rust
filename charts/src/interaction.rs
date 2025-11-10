@@ -22,6 +22,13 @@ pub fn handle_mouse_input(
     // Bevy's cursor_position() has (0,0) at top-left with Y down
     // World space has (0,0) at center with Y up - need to flip Y
     if let Some(cursor_pos) = window.cursor_position() {
+        // Check if cursor is within chart area (left 70%)
+        let chart_width = window.width() * 0.7;
+        if cursor_pos.x > chart_width {
+            // Cursor is in chat UI area, don't process chart interactions
+            return;
+        }
+
         let window_size = Vec2::new(window.width(), window.height());
         interaction.mouse_pos = Vec2::new(
             cursor_pos.x - window_size.x / 2.0,

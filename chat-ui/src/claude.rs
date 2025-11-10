@@ -125,7 +125,7 @@ pub fn init_claude_client(mut commands: Commands, runtime: ResMut<TokioTasksRunt
 /// System to send user messages to Claude
 /// This runs every frame and checks for new user messages
 pub fn send_to_claude(
-    chat_state: Res<ChatState>,
+    mut chat_state: ResMut<ChatState>,
     claude_client: Res<ClaudeClient>,
     mut last_count: Local<usize>,
 ) {
@@ -136,8 +136,18 @@ pub fn send_to_claude(
         if let Some(last_msg) = chat_state.messages.last() {
             // Only send if it's a user message and we're in waiting state
             if last_msg.is_user && chat_state.is_waiting {
-                if let Err(_e) = claude_client.sender.send(last_msg.content.clone()) {
+                // Build the message to send, including context if available
+                let message_to_send = if let Some(context) = &chat_state.chart_context {
+                    format!("[Context: {}]\n\nUser: {}", context, last_msg.content)
+                } else {
+                    last_msg.content.clone()
+                };
+
+                if let Err(_e) = claude_client.sender.send(message_to_send) {
                 }
+
+                // Clear the chart context after sending so it doesn't get reused
+                chat_state.chart_context = None;
             }
         }
         *last_count = current_count;

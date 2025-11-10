@@ -2,18 +2,47 @@ mod types;
 mod rendering;
 mod interaction;
 mod screenshot;
+mod ui_layout;
 
 use bevy::prelude::*;
 use bevy::diagnostic::{FrameTimeDiagnosticsPlugin, DiagnosticsStore};
 use bevy::window::PresentMode;
 use bevy::camera::Camera2d;
-use bevy::remote::{RemotePlugin, BrpResult, BrpError};
+use bevy::remote::{RemotePlugin, BrpResult};
 use bevy::remote::http::RemoteHttpPlugin;
 use serde_json::Value;
 use types::*;
 use rendering::*;
 use interaction::*;
 use screenshot::take_screenshot;
+use chat_ui::prelude::*;
+use bevy::ui::Val;
+
+// ============================================================================
+// CHART CONTEXT UPDATE
+// ============================================================================
+
+/// System that updates the chat context with current chart state
+fn update_chart_context(
+    chart: Res<Chart>,
+    mut chat_state: ResMut<ChatState>,
+) {
+    // Only update if chat is waiting for input (user is about to send a message)
+    // or if chart has changed significantly
+    if chat_state.is_changed() || chart.is_changed() {
+        let context = format!(
+            "Chart: {} candles visible (indices {}-{}), price range: ${:.2}-${:.2}, {} indicators active, volume pane: {}",
+            chart.visible_candle_count,
+            chart.visible_candle_start,
+            chart.visible_candle_start + chart.visible_candle_count,
+            chart.panes.get(0).map_or(0.0, |p| p.space.visible_price_min),
+            chart.panes.get(0).map_or(0.0, |p| p.space.visible_price_max),
+            chart.indicators.iter().filter(|i| i.visible).count(),
+            if chart.panes.len() > 1 { "visible" } else { "hidden" }
+        );
+        chat_state.chart_context = Some(context);
+    }
+}
 
 // ============================================================================
 // MAIN
@@ -30,12 +59,19 @@ fn main() {
             }),
             ..default()
         }))
+        .add_plugins(ChatUiPlugin)
+        .insert_resource(ChatUiConfig {
+            width: Val::Percent(30.0),
+            height: Val::Percent(100.0),
+        })
         .add_plugins(FrameTimeDiagnosticsPlugin::default())
         .add_plugins(RemotePlugin::default()
             .with_method("chart/screenshot", handle_screenshot))  // Enable Bevy Remote Protocol for MCP integration
         .add_plugins(RemoteHttpPlugin::default())  // Enable HTTP transport on port 15702
+        .add_systems(Startup, ui_layout::setup_split_layout)
         .add_systems(Startup, setup)
         .add_systems(Startup, setup_fps_counter)
+        .add_systems(Update, update_chart_context)
         .add_systems(Update, (
             handle_mouse_input,
             update_crosshair,

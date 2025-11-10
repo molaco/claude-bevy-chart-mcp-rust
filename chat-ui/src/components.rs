@@ -1,5 +1,21 @@
 use bevy::prelude::*;
 
+/// Configuration for the Chat UI layout
+#[derive(Resource)]
+pub struct ChatUiConfig {
+    pub width: Val,
+    pub height: Val,
+}
+
+impl Default for ChatUiConfig {
+    fn default() -> Self {
+        Self {
+            width: Val::Percent(100.0),
+            height: Val::Percent(100.0),
+        }
+    }
+}
+
 /// Resource that holds the global chat state
 #[derive(Resource, Default)]
 pub struct ChatState {
@@ -7,6 +23,8 @@ pub struct ChatState {
     pub messages: Vec<ChatMessage>,
     /// Whether we're currently waiting for a Claude response
     pub is_waiting: bool,
+    /// Optional external context to include in the next Claude message
+    pub chart_context: Option<String>,
 }
 
 /// Represents a single chat message

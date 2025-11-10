@@ -3,16 +3,16 @@ use bevy::input_focus::AutoFocus;
 use bevy_ui_text_input::{TextInputNode, TextInputMode};
 use crate::components::*;
 
-pub fn setup_chat_ui(mut commands: Commands) {
-    // Spawn Camera2d
-    commands.spawn(Camera2d);
-
+pub fn setup_chat_ui(mut commands: Commands, config: Option<Res<ChatUiConfig>>) {
     // Spawn root container
     commands
         .spawn((
             Node {
-                width: Val::Percent(100.0),
-                height: Val::Percent(100.0),
+                position_type: PositionType::Absolute,
+                right: Val::Px(0.0),
+                top: Val::Px(0.0),
+                width: config.as_ref().map_or(Val::Percent(100.0), |c| c.width),
+                height: config.as_ref().map_or(Val::Percent(100.0), |c| c.height),
                 flex_direction: FlexDirection::Column,
                 padding: UiRect::all(Val::Px(10.0)),
                 ..default()

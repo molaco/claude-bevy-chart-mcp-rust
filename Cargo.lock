@@ -1937,6 +1937,7 @@ name = "charts"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "chat-ui",
  "chrono",
  "duckdb",
  "serde_json",
