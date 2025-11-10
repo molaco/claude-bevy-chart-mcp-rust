@@ -33,5 +33,6 @@ pub mod prelude {
     pub use crate::{
         ChatUiPlugin,
         components::*,
+        layout::ChatUiRoot,
     };
 }

@@ -1,32 +1,29 @@
-mod types;
-mod rendering;
 mod interaction;
+mod rendering;
 mod screenshot;
+mod types;
 mod ui_layout;
 
-use bevy::prelude::*;
-use bevy::diagnostic::{FrameTimeDiagnosticsPlugin, DiagnosticsStore};
-use bevy::window::PresentMode;
 use bevy::camera::Camera2d;
-use bevy::remote::{RemotePlugin, BrpResult};
+use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
+use bevy::prelude::*;
 use bevy::remote::http::RemoteHttpPlugin;
+use bevy::remote::{BrpResult, RemotePlugin};
+use bevy::window::PresentMode;
+use chat_ui::prelude::*;
+use interaction::*;
+use rendering::*;
+use screenshot::take_screenshot;
 use serde_json::Value;
 use types::*;
-use rendering::*;
-use interaction::*;
-use screenshot::take_screenshot;
-use chat_ui::prelude::*;
-use bevy::ui::Val;
+use ui_layout::ChartViewport;
 
 // ============================================================================
 // CHART CONTEXT UPDATE
 // ============================================================================
 
 /// System that updates the chat context with current chart state
-fn update_chart_context(
-    chart: Res<Chart>,
-    mut chat_state: ResMut<ChatState>,
-) {
+fn update_chart_context(chart: Res<Chart>, mut chat_state: ResMut<ChatState>) {
     // Only update if chat is waiting for input (user is about to send a message)
     // or if chart has changed significantly
     if chat_state.is_changed() || chart.is_changed() {
@@ -60,34 +57,31 @@ fn main() {
             ..default()
         }))
         .add_plugins(ChatUiPlugin)
-        .insert_resource(ChatUiConfig {
-            width: Val::Percent(30.0),
-            height: Val::Percent(100.0),
-        })
         .add_plugins(FrameTimeDiagnosticsPlugin::default())
-        .add_plugins(RemotePlugin::default()
-            .with_method("chart/screenshot", handle_screenshot))  // Enable Bevy Remote Protocol for MCP integration
-        .add_plugins(RemoteHttpPlugin::default())  // Enable HTTP transport on port 15702
+        .add_plugins(RemotePlugin::default().with_method("chart/screenshot", handle_screenshot)) // Enable Bevy Remote Protocol for MCP integration
+        .add_plugins(RemoteHttpPlugin::default()) // Enable HTTP transport on port 15702
         .add_systems(Startup, ui_layout::setup_split_layout)
         .add_systems(Startup, setup)
         .add_systems(Startup, setup_fps_counter)
+        .add_systems(PostStartup, ui_layout::reparent_chat_to_container)
         .add_systems(Update, update_chart_context)
-        .add_systems(Update, (
-            handle_mouse_input,
-            update_crosshair,
-        ).chain())  // Ensures crosshair updates immediately after mouse input
+        .add_systems(Update, (handle_mouse_input, update_crosshair).chain()) // Ensures crosshair updates immediately after mouse input
         .add_systems(Update, toggle_volume_pane)
         .add_systems(Update, toggle_sma_indicators)
         .add_systems(Update, check_lazy_load)
         .add_systems(Update, screenshot_on_keypress)
         .add_systems(Update, update_fps_counter)
-        .add_systems(Update, (
-            render_grid_and_axes,
-            render_candlesticks,
-            render_moving_averages,
-            render_volume_bars,
-            reset_redraw_flag,
-        ).chain())  // Run rendering systems in sequence, then reset flag
+        .add_systems(
+            Update,
+            (
+                render_grid_and_axes,
+                render_candlesticks,
+                render_moving_averages,
+                render_volume_bars,
+                reset_redraw_flag,
+            )
+                .chain(),
+        ) // Run rendering systems in sequence, then reset flag
         .run();
 }
 
@@ -95,40 +89,54 @@ fn main() {
 // SETUP
 // ============================================================================
 
-fn setup(mut commands: Commands, window_query: Query<Entity, With<Window>>) {
+fn setup(
+    mut commands: Commands,
+    window_query: Query<(Entity, &Window), With<Window>>
+) {
     // Spawn camera
     commands.spawn(Camera2d);
 
+    // Get window dimensions for responsive sizing
+    let Ok((window_entity, window)) = window_query.single() else {
+        eprintln!("Failed to get window");
+        return;
+    };
+
     // Initialize CursorIcon component on window (required in Bevy 0.17)
-    if let Ok(window_entity) = window_query.single() {
-        commands.entity(window_entity).insert(bevy::window::CursorIcon::default());
-    }
+    commands
+        .entity(window_entity)
+        .insert(bevy::window::CursorIcon::default());
 
     // Initialize database connection
     let db_path = "/home/molaco/.local/share/flowsurface/flowsurface.duckdb";
-    let db = ChartDatabase::new(db_path)
-        .expect("Failed to open database");
+    let db = ChartDatabase::new(db_path).expect("Failed to open database");
 
     // Load initial data
     let ticker_id = 1; // BTCUSDT
     let timeframe = "15m";
 
     // Get time range and load most recent candles
-    let (min_time, max_time) = db.get_time_range(ticker_id, timeframe)
+    let (min_time, max_time) = db
+        .get_time_range(ticker_id, timeframe)
         .expect("Failed to get time range");
 
     println!("Database time range: {} to {}", min_time, max_time);
 
-    let candles = db.load_candles(ticker_id, timeframe, min_time, max_time)
+    let candles = db
+        .load_candles(ticker_id, timeframe, min_time, max_time)
         .expect("Failed to load candles");
 
     println!("Loaded {} candles", candles.len());
 
-    // Total chart area (leave room for axes labels)
-    // Window is 1600x900, but we need margins for labels
+    // Calculate chart area dynamically based on window size
+    // Chart occupies 70% of window width (left side)
+    // Leave margins for axis labels (5% on each side vertically)
+    let chart_width: f32 = window.width() * 0.7;
+    let chart_height: f32 = window.height() * 0.9;  // 90% of height to leave room for labels
+
     let total_area = Rect::from_center_size(
-        Vec2::new(-40.0, 10.0),  // Offset left and up slightly
-        Vec2::new(1400.0, 780.0), // Smaller than window to leave room for labels
+        Vec2::new(0.0, 0.0),  // Centered in chart viewport
+        Vec2::new(chart_width * 0.95, chart_height),  // Leave 5% horizontal margin for labels
     );
 
     let visible_candle_count = 50.min(candles.len());
@@ -140,14 +148,14 @@ fn setup(mut commands: Commands, window_query: Query<Entity, With<Window>>) {
         Pane::new(
             PaneId::Price,
             PaneType::Price,
-            0.7, // 70% of chart height
+            0.7,             // 70% of chart height
             Rect::default(), // Will be calculated by calculate_pane_layouts
             visible_candle_count,
         ),
         Pane::new(
             PaneId::Volume,
             PaneType::Volume,
-            0.3, // 30% of chart height
+            0.3,             // 30% of chart height
             Rect::default(), // Will be calculated by calculate_pane_layouts
             visible_candle_count,
         ),
@@ -158,8 +166,8 @@ fn setup(mut commands: Commands, window_query: Query<Entity, With<Window>>) {
 
     // Calculate Moving Average indicators (before fitting bounds so we can include them)
     let indicators = vec![
-        MovingAverage::new_sma(&candles, 20, Color::srgb(1.0, 0.8, 0.0)),  // Yellow SMA-20
-        MovingAverage::new_sma(&candles, 50, Color::srgb(0.0, 1.0, 1.0)),  // Cyan SMA-50
+        MovingAverage::new_sma(&candles, 20, Color::srgb(1.0, 0.8, 0.0)), // Yellow SMA-20
+        MovingAverage::new_sma(&candles, 50, Color::srgb(0.0, 1.0, 1.0)), // Cyan SMA-50
         MovingAverage::new_sma(&candles, 200, Color::srgb(1.0, 0.0, 1.0)), // Magenta SMA-200
     ];
 
@@ -171,11 +179,12 @@ fn setup(mut commands: Commands, window_query: Query<Entity, With<Window>>) {
                     &candles,
                     &indicators,
                     visible_candle_start,
-                    visible_candle_count
+                    visible_candle_count,
                 );
             }
             PaneType::Volume => {
-                pane.space.fit_volume_bounds(&candles, visible_candle_start, visible_candle_count);
+                pane.space
+                    .fit_volume_bounds(&candles, visible_candle_start, visible_candle_count);
             }
             _ => {}
         }

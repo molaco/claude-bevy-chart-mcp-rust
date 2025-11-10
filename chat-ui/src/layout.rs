@@ -1,23 +1,27 @@
-use bevy::prelude::*;
-use bevy::input_focus::AutoFocus;
-use bevy_ui_text_input::{TextInputNode, TextInputMode};
 use crate::components::*;
+use bevy::input_focus::AutoFocus;
+use bevy::prelude::*;
+use bevy_ui_text_input::{TextInputMode, TextInputNode};
 
-pub fn setup_chat_ui(mut commands: Commands, config: Option<Res<ChatUiConfig>>) {
-    // Spawn root container
+/// Marker component to identify the chat UI container
+#[derive(Component)]
+pub struct ChatUiRoot;
+
+pub fn setup_chat_ui(mut commands: Commands) {
+    // Chat UI positioned within its container
+    // 50% of container width, 70% of height, left-aligned horizontally, centered vertically
     commands
         .spawn((
             Node {
-                position_type: PositionType::Absolute,
-                right: Val::Px(0.0),
-                top: Val::Px(0.0),
-                width: config.as_ref().map_or(Val::Percent(100.0), |c| c.width),
-                height: config.as_ref().map_or(Val::Percent(100.0), |c| c.height),
+                width: Val::Percent(50.0),   // 50% of container width
+                height: Val::Percent(70.0),  // 70% of container height
                 flex_direction: FlexDirection::Column,
                 padding: UiRect::all(Val::Px(10.0)),
+                // align_self removed - will use parent's centering for vertical, left by default for horizontal
                 ..default()
             },
             BackgroundColor(Color::srgb(0.235, 0.235, 0.275)),
+            ChatUiRoot,
         ))
         .with_children(|parent| {
             // Header
@@ -91,3 +95,5 @@ pub fn setup_chat_ui(mut commands: Commands, config: Option<Res<ChatUiConfig>>) 
                 });
         });
 }
+
+// Note: reparent_chat_to_container removed - now handled in charts/src/ui_layout.rs
