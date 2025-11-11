@@ -267,12 +267,11 @@ pub fn calculate_pane_layouts(panes: &mut [Pane], total_area: Rect, visible_cand
         let pane_min_y = current_y - pane_height;
         let pane_max_y = current_y;
 
-        // Create viewport for this pane (constrained to 70% of width for charts)
-        let chart_width = total_area.width() * 0.7;
-        let chart_max_x = total_area.min.x + chart_width;
+        // Create viewport for this pane
+        // total_area is already sized correctly for the chart viewport
         pane.space.viewport = Rect::from_corners(
             Vec2::new(total_area.min.x, pane_min_y),
-            Vec2::new(chart_max_x, pane_max_y),
+            Vec2::new(total_area.max.x, pane_max_y),
         );
 
         // Recalculate cached values

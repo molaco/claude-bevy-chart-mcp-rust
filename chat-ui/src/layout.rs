@@ -13,8 +13,8 @@ pub fn setup_chat_ui(mut commands: Commands) {
     commands
         .spawn((
             Node {
-                width: Val::Percent(50.0),   // 50% of container width
-                height: Val::Percent(70.0),  // 70% of container height
+                width: Val::Percent(90.0),  // 50% of container width
+                height: Val::Percent(70.0), // 70% of container height
                 flex_direction: FlexDirection::Column,
                 padding: UiRect::all(Val::Px(10.0)),
                 // align_self removed - will use parent's centering for vertical, left by default for horizontal

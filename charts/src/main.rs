@@ -89,10 +89,7 @@ fn main() {
 // SETUP
 // ============================================================================
 
-fn setup(
-    mut commands: Commands,
-    window_query: Query<(Entity, &Window), With<Window>>
-) {
+fn setup(mut commands: Commands, window_query: Query<(Entity, &Window), With<Window>>) {
     // Spawn camera
     commands.spawn(Camera2d);
 
@@ -131,12 +128,20 @@ fn setup(
     // Calculate chart area dynamically based on window size
     // Chart occupies 70% of window width (left side)
     // Leave margins for axis labels (5% on each side vertically)
-    let chart_width: f32 = window.width() * 0.7;
-    let chart_height: f32 = window.height() * 0.9;  // 90% of height to leave room for labels
+    //TODO: fix this
+    let chart_width: f32 = window.width() * 0.85;
+    let chart_height: f32 = window.height() * 0.9; // 90% of height to leave room for labels
 
+    // Position chart in the left 70% of window
+    // Window world space: -window.width/2 to +window.width/2
+    // Chart center X = left_edge + (chart_width / 2)
+    // let center_x = -window.width() / 2.0 + chart_width / 2.0;
+
+    //TODO: change this bullshit to percentages
     let total_area = Rect::from_center_size(
-        Vec2::new(0.0, 0.0),  // Centered in chart viewport
-        Vec2::new(chart_width * 0.95, chart_height),  // Leave 5% horizontal margin for labels
+        // Vec2::new(center_x, 0.0),  // Centered in left 70% area
+        Vec2::new(-chart_width * 0.5, 0.0), // Centered in left 70% area
+        Vec2::new(chart_width * 0.95, chart_height), // Leave 5% horizontal margin for labels
     );
 
     let visible_candle_count = 50.min(candles.len());
