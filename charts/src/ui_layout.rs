@@ -34,17 +34,31 @@ pub fn setup_split_layout(mut commands: Commands) {
                     ChartViewport,
                 ))
                 .with_children(|viewport| {
+                    viewport.spawn((
+                        Node {
+                            width: Val::Percent(90.0),
+                            height: Val::Percent(70.0),
+                            border: UiRect::all(Val::Px(2.0)),
+                            display: Display::Flex, // Always visible
+                            ..default()
+                        },
+                        BorderColor::all(Color::srgba(0.5, 0.5, 0.5, 0.6)), // Gray
+                        BackgroundColor(Color::NONE),
+                        // No component marker
+                    ));
+
                     // Focus indicator border for chart (visible when chart has focus)
                     viewport.spawn((
                         Node {
                             width: Val::Percent(90.0),  // Slightly smaller than container
                             height: Val::Percent(70.0), // Leave margins
-                            border: UiRect::all(Val::Px(3.0)),
+                            position_type: PositionType::Absolute,
+                            border: UiRect::all(Val::Px(2.0)),
                             display: Display::Flex, // Visible by default (chart starts with focus)
                             ..default()
                         },
                         // BorderColor::all(Color::srgb(0.2, 0.6, 1.0)), // Blue focus border
-                        BorderColor::all(Color::srgba(0.5, 0.5, 0.5, 0.6)),
+                        BorderColor::all(Color::srgba(0.7, 0.7, 0.7, 0.6)),
                         BackgroundColor(Color::NONE), // Transparent background
                         ChartFocusIndicator,
                     ));
@@ -69,12 +83,12 @@ pub fn setup_split_layout(mut commands: Commands) {
                             position_type: PositionType::Absolute,
                             width: Val::Percent(90.0),
                             height: Val::Percent(70.0),
-                            border: UiRect::all(Val::Px(3.0)),
+                            border: UiRect::all(Val::Px(2.0)),
                             display: Display::None, // Hidden by default
                             ..default()
                         },
-                        BorderColor::all(Color::srgb(0.2, 0.6, 1.0)), // Blue focus border
-                        // BorderColor::all(Color::srgba(0.5, 0.5, 0.5, 0.6)),
+                        // BorderColor::all(Color::srgb(0.2, 0.6, 1.0)), // Blue focus border
+                        BorderColor::all(Color::srgba(0.7, 0.7, 0.7, 0.6)),
                         BackgroundColor(Color::NONE), // Transparent background
                         ChatFocusIndicator,
                     ));
