@@ -140,7 +140,7 @@ fn setup(mut commands: Commands, window_query: Query<(Entity, &Window), With<Win
     //TODO: change this bullshit to percentages
     let total_area = Rect::from_center_size(
         // Vec2::new(center_x, 0.0),  // Centered in left 70% area
-        Vec2::new(-chart_width * 0.5, 0.0), // Centered in left 70% area
+        Vec2::new(-chart_width * 0.325, 0.0), // Centered in left 70% area
         Vec2::new(chart_width * 0.95, chart_height), // Leave 5% horizontal margin for labels
     );
 

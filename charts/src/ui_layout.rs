@@ -41,7 +41,7 @@ pub fn setup_split_layout(mut commands: Commands) {
                             border: UiRect::all(Val::Px(2.0)),
                             ..default()
                         },
-                        BorderColor::all(Color::srgba(0.3, 0.3, 0.35, 0.8)), // Semi-transparent border
+                        BorderColor::all(Color::srgba(0.5, 0.5, 0.5, 0.6)), // Semi-transparent border
                         BackgroundColor(Color::NONE), // Transparent background
                     ));
                 });
