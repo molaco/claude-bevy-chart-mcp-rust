@@ -1,6 +1,7 @@
 use bevy::prelude::*;
 use bevy::input::mouse::MouseWheel;
 use bevy::window::{CursorIcon, SystemCursorIcon};
+use crate::focus::{FocusState, FocusTarget};
 use crate::types::*;
 
 // ============================================================================
@@ -323,9 +324,15 @@ pub fn check_lazy_load(
 /// Toggle volume pane visibility with 'V' key
 pub fn toggle_volume_pane(
     keys: Res<ButtonInput<KeyCode>>,
+    focus: Res<FocusState>,
     mut toggle_state: ResMut<VolumeToggleState>,
     mut chart: ResMut<Chart>,
 ) {
+    // Only process if chart has focus
+    if focus.current != FocusTarget::Chart {
+        return;
+    }
+
     if keys.just_pressed(KeyCode::KeyV) {
         toggle_state.visible = !toggle_state.visible;
 
@@ -380,8 +387,14 @@ pub fn toggle_volume_pane(
 /// Keys: 1 = SMA-20, 2 = SMA-50, 3 = SMA-200, S = Toggle all SMAs
 pub fn toggle_sma_indicators(
     keys: Res<ButtonInput<KeyCode>>,
+    focus: Res<FocusState>,
     mut chart: ResMut<Chart>,
 ) {
+    // Only process if chart has focus
+    if focus.current != FocusTarget::Chart {
+        return;
+    }
+
     let mut toggled = false;
 
     // Toggle individual SMAs with number keys

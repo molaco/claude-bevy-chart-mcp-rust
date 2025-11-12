@@ -35,4 +35,6 @@ pub mod prelude {
         components::*,
         layout::ChatUiRoot,
     };
+    // Re-export specific components for external use
+    pub use crate::components::ChatInputField;
 }

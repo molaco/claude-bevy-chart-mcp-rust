@@ -1,3 +1,4 @@
+mod focus;
 mod interaction;
 mod rendering;
 mod screenshot;
@@ -11,6 +12,7 @@ use bevy::remote::http::RemoteHttpPlugin;
 use bevy::remote::{BrpResult, RemotePlugin};
 use bevy::window::PresentMode;
 use chat_ui::prelude::*;
+use focus::*;
 use interaction::*;
 use rendering::*;
 use screenshot::take_screenshot;
@@ -60,11 +62,13 @@ fn main() {
         .add_plugins(FrameTimeDiagnosticsPlugin::default())
         .add_plugins(RemotePlugin::default().with_method("chart/screenshot", handle_screenshot)) // Enable Bevy Remote Protocol for MCP integration
         .add_plugins(RemoteHttpPlugin::default()) // Enable HTTP transport on port 15702
+        .init_resource::<FocusState>()
         .add_systems(Startup, ui_layout::setup_split_layout)
         .add_systems(Startup, setup)
         .add_systems(Startup, setup_fps_counter)
         .add_systems(PostStartup, ui_layout::reparent_chat_to_container)
         .add_systems(Update, update_chart_context)
+        .add_systems(Update, (handle_focus_tab, handle_focus_click, update_focus_indicators, manage_text_input_focus).chain())
         .add_systems(Update, (handle_mouse_input, update_crosshair).chain()) // Ensures crosshair updates immediately after mouse input
         .add_systems(Update, toggle_volume_pane)
         .add_systems(Update, toggle_sma_indicators)
@@ -250,8 +254,14 @@ struct ScreenshotCounter(u32);
 fn screenshot_on_keypress(
     mut commands: Commands,
     input: Res<ButtonInput<KeyCode>>,
+    focus: Res<FocusState>,
     mut counter: ResMut<ScreenshotCounter>,
 ) {
+    // Only take screenshots when chart has focus
+    if focus.current != FocusTarget::Chart {
+        return;
+    }
+
     if input.just_pressed(KeyCode::KeyF) {
         take_screenshot(&mut commands, None, &mut counter.0);
     }
