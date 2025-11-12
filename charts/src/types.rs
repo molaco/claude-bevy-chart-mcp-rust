@@ -675,6 +675,8 @@ pub struct InteractionState {
 
     // Crosshair optimization: track last candle to debounce text updates
     pub last_crosshair_candle_index: Option<usize>,
+    // Track last mouse position to avoid redundant crosshair updates
+    pub last_crosshair_mouse_pos: Vec2,
 }
 
 /// Volume pane toggle state

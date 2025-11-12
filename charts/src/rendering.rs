@@ -692,18 +692,24 @@ pub fn update_crosshair(
     let mouse_x = interaction.mouse_pos.x;
     let mouse_y = interaction.mouse_pos.y;
 
-    // ========== UPDATE VERTICAL CROSSHAIR LINE SEGMENTS ==========
-    for segment in &crosshair_entities.vertical_line_segments {
-        if let Ok(mut transform) = transforms.get_mut(*segment) {
-            transform.translation.x = mouse_x;
-        }
-        if let Ok(mut vis) = visibilities.get_mut(*segment) {
-            *vis = Visibility::Visible;
-        }
-    }
+    // ========== OPTIMIZATION: Only update positions if mouse moved ==========
+    let mouse_moved = interaction.mouse_pos != interaction.last_crosshair_mouse_pos;
 
-    // ========== UPDATE PER-PANE HORIZONTAL LINES & LABELS ==========
-    for pane in &chart.panes {
+    if mouse_moved {
+        interaction.last_crosshair_mouse_pos = interaction.mouse_pos;
+
+        // ========== UPDATE VERTICAL CROSSHAIR LINE SEGMENTS ==========
+        for segment in &crosshair_entities.vertical_line_segments {
+            if let Ok(mut transform) = transforms.get_mut(*segment) {
+                transform.translation.x = mouse_x;
+            }
+            if let Ok(mut vis) = visibilities.get_mut(*segment) {
+                *vis = Visibility::Visible;
+            }
+        }
+
+        // ========== UPDATE PER-PANE HORIZONTAL LINES & LABELS ==========
+        for pane in &chart.panes {
         let viewport = &pane.space.viewport;
 
         // Find entities for this pane
@@ -768,6 +774,7 @@ pub fn update_crosshair(
             }
         }
     }
+    } // End of mouse_moved check
 
     // ========== FIND CANDLE AT CURSOR ==========
     let (candle_index, _) = if let Some(pane) = chart.panes.first() {

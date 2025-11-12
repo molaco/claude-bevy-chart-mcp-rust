@@ -88,6 +88,11 @@ pub fn update_focus_indicators(
     mut chart_indicator_query: Query<&mut Node, (With<ChartFocusIndicator>, Without<ChatFocusIndicator>)>,
     mut chat_indicator_query: Query<&mut Node, (With<ChatFocusIndicator>, Without<ChartFocusIndicator>)>,
 ) {
+    // Only update if focus state changed
+    if !focus.is_changed() {
+        return;
+    }
+
     // Update chart indicator
     if let Ok(mut node) = chart_indicator_query.single_mut() {
         node.display = if focus.current == FocusTarget::Chart {
