@@ -67,14 +67,14 @@ pub fn setup_split_layout(mut commands: Commands) {
                     container.spawn((
                         Node {
                             position_type: PositionType::Absolute,
-                            width: Val::Percent(100.0),
-                            height: Val::Percent(100.0),
+                            width: Val::Percent(90.0),
+                            height: Val::Percent(70.0),
                             border: UiRect::all(Val::Px(3.0)),
                             display: Display::None, // Hidden by default
                             ..default()
                         },
-                        // BorderColor::all(Color::srgb(0.2, 0.6, 1.0)), // Blue focus border
-                        BorderColor::all(Color::srgba(0.5, 0.5, 0.5, 0.6)),
+                        BorderColor::all(Color::srgb(0.2, 0.6, 1.0)), // Blue focus border
+                        // BorderColor::all(Color::srgba(0.5, 0.5, 0.5, 0.6)),
                         BackgroundColor(Color::NONE), // Transparent background
                         ChatFocusIndicator,
                     ));
