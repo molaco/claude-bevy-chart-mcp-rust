@@ -17,34 +17,19 @@ pub fn setup_chat_ui(mut commands: Commands) {
                 height: Val::Percent(70.0), // 70% of container height
                 flex_direction: FlexDirection::Column,
                 padding: UiRect::all(Val::Px(10.0)),
+                border: UiRect::all(Val::Px(2.0)),
+                // margin: UiRect::left(Val::Px(20.0)),
+                // align_self: AlignSelf::Start, // aligns to left within container
                 // align_self removed - will use parent's centering for vertical, left by default for horizontal
                 ..default()
             },
-            BackgroundColor(Color::srgb(0.235, 0.235, 0.275)),
+            // BackgroundColor(Color::srgb(0.235, 0.235, 0.275)),
+            // BackgroundColor(Color::srgb(0.5, 0.5, 0.5)),
+            BackgroundColor(Color::srgb_u8(43, 44, 47)),
+            BorderColor::all(Color::srgba(0.5, 0.5, 0.5, 0.6)),
             ChatUiRoot,
         ))
         .with_children(|parent| {
-            // Header
-            parent
-                .spawn((
-                    Node {
-                        width: Val::Percent(100.0),
-                        height: Val::Px(50.0),
-                        justify_content: JustifyContent::Center,
-                        align_items: AlignItems::Center,
-                        margin: UiRect::bottom(Val::Px(10.0)),
-                        ..default()
-                    },
-                    BackgroundColor(Color::srgb(0.2, 0.2, 0.22)),
-                ))
-                .with_children(|parent| {
-                    parent.spawn((
-                        Text::new("Chart Analysis"),
-                        TextFont::from_font_size(24.0),
-                        TextColor(Color::srgb(0.9, 0.9, 0.92)),
-                    ));
-                });
-
             // Message area
             parent.spawn((
                 Node {
@@ -54,9 +39,13 @@ pub fn setup_chat_ui(mut commands: Commands) {
                     overflow: Overflow::clip_y(),
                     padding: UiRect::all(Val::Px(10.0)),
                     margin: UiRect::bottom(Val::Px(10.0)),
+                    border: UiRect::all(Val::Px(2.0)),
                     ..default()
                 },
-                BackgroundColor(Color::srgb(0.18, 0.18, 0.20)),
+                // BackgroundColor(Color::NONE),
+                BackgroundColor(Color::srgb_u8(43, 44, 47)),
+                // BackgroundColor(Color::srgb(0.1, 0.1, 0.1)),
+                BorderColor::all(Color::srgba(0.5, 0.5, 0.5, 0.6)),
                 ScrollPosition::default(),
                 MessageContainer,
             ));
@@ -71,8 +60,11 @@ pub fn setup_chat_ui(mut commands: Commands) {
                         border: UiRect::all(Val::Px(2.0)),
                         ..default()
                     },
-                    BackgroundColor(Color::srgb(0.22, 0.22, 0.25)),
-                    BorderColor::all(Color::srgb(0.35, 0.35, 0.38)),
+                    // BackgroundColor(Color::srgb(0.22, 0.22, 0.25)),
+                    // BackgroundColor(Color::NONE),
+                    BackgroundColor(Color::srgb_u8(43, 44, 47)),
+                    // BorderColor::all(Color::NONE),
+                    BorderColor::all(Color::srgba(0.5, 0.5, 0.5, 0.6)),
                 ))
                 .with_children(|parent| {
                     parent.spawn((
@@ -87,7 +79,7 @@ pub fn setup_chat_ui(mut commands: Commands) {
                             height: Val::Percent(100.0),
                             ..default()
                         },
-                        BackgroundColor(Color::srgb(0.18, 0.18, 0.20)),
+                        BackgroundColor(Color::NONE),
                         ChatInputField,
                         // AutoFocus ensures the text input receives keyboard focus on startup
                         AutoFocus,

@@ -1,7 +1,7 @@
 //! Minimal example - just the text input
 
 use bevy::prelude::*;
-use bevy_ui_text_input::{TextInputPlugin, TextInputNode, TextInputMode, SubmitText};
+use bevy_ui_text_input::{SubmitText, TextInputMode, TextInputNode, TextInputPlugin};
 
 fn main() {
     App::new()
@@ -27,13 +27,11 @@ fn setup(mut commands: Commands) {
             margin: UiRect::all(Val::Auto),
             ..default()
         },
-        BackgroundColor(Color::srgb(0.2, 0.2, 0.25)),
+        BackgroundColor(Color::NONE),
     ));
 }
 
-fn handle_submit(
-    mut submit_events: MessageReader<SubmitText>,
-) {
+fn handle_submit(mut submit_events: MessageReader<SubmitText>) {
     for event in submit_events.read() {
         println!("Submitted text: {}", event.text);
     }

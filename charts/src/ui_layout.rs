@@ -52,6 +52,7 @@ pub fn setup_split_layout(mut commands: Commands) {
                     width: Val::Percent(30.0),
                     height: Val::Percent(100.0),
                     align_items: AlignItems::Center, // Center chat vertically
+                    justify_content: JustifyContent::FlexStart, // aligns to left
                     ..default()
                 },
                 ChatUiContainer,

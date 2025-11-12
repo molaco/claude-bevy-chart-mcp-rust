@@ -16,7 +16,7 @@ use rendering::*;
 use screenshot::take_screenshot;
 use serde_json::Value;
 use types::*;
-use ui_layout::ChartViewport;
+// use ui_layout::ChartViewport;
 
 // ============================================================================
 // CHART CONTEXT UPDATE
@@ -128,7 +128,6 @@ fn setup(mut commands: Commands, window_query: Query<(Entity, &Window), With<Win
     // Calculate chart area dynamically based on window size
     // Chart occupies 70% of window width (left side)
     // Leave margins for axis labels (5% on each side vertically)
-    //TODO: fix this
     let chart_width: f32 = window.width() * 0.85;
     let chart_height: f32 = window.height() * 0.9; // 90% of height to leave room for labels
 
@@ -137,7 +136,6 @@ fn setup(mut commands: Commands, window_query: Query<(Entity, &Window), With<Win
     // Chart center X = left_edge + (chart_width / 2)
     // let center_x = -window.width() / 2.0 + chart_width / 2.0;
 
-    //TODO: change this bullshit to percentages
     let total_area = Rect::from_center_size(
         // Vec2::new(center_x, 0.0),  // Centered in left 70% area
         Vec2::new(-chart_width * 0.325, 0.0), // Centered in left 70% area
