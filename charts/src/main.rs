@@ -9,13 +9,13 @@ use bevy::camera::Camera2d;
 use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
 use bevy::prelude::*;
 use bevy::remote::http::RemoteHttpPlugin;
-use bevy::remote::{BrpResult, RemotePlugin};
+use bevy::remote::{BrpError, BrpResult, RemotePlugin};
 use bevy::window::PresentMode;
 use chat_ui::prelude::*;
 use focus::*;
 use interaction::*;
 use rendering::*;
-use screenshot::take_screenshot;
+use screenshot::{take_screenshot, crop_screenshot_to_chart};
 use serde_json::Value;
 use types::*;
 // use ui_layout::ChartViewport;
@@ -279,11 +279,54 @@ fn handle_screenshot(
         .and_then(|p| p.as_str())
         .map(String::from);
 
-    let path = take_screenshot(&mut commands, path_param, &mut counter);
+    // Generate the desired final path
+    let final_path = path_param.unwrap_or_else(|| {
+        let name = format!("screenshot-{:04}.png", *counter);
+        *counter += 1;
+        name
+    });
 
+    // Generate temp path (insert "-tmp" before extension)
+    let temp_path = final_path.replace(".png", "-tmp.png");
+
+    // Take screenshot to temp file
+    take_screenshot(&mut commands, Some(temp_path.clone()), &mut 0);
+
+    // Spawn a separate thread to wait for screenshot and crop it (don't join - let it run async)
+    let temp_path_clone = temp_path.clone();
+    let final_path_clone = final_path.clone();
+    std::thread::spawn(move || {
+        // Wait for temp file to exist (max 10 seconds, check every 50ms)
+        let start = std::time::Instant::now();
+        while !std::path::Path::new(&temp_path_clone).exists() {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            if start.elapsed() > std::time::Duration::from_secs(10) {
+                eprintln!("Screenshot timeout: temp file not created within 10 seconds");
+                return;
+            }
+        }
+
+        // Crop from temp to final path (left 70% = chart area only)
+        if let Err(e) = crop_screenshot_to_chart(&temp_path_clone, &final_path_clone) {
+            eprintln!("Failed to crop screenshot: {}", e);
+            let _ = std::fs::remove_file(&temp_path_clone);
+            return;
+        }
+
+        // Delete temp file
+        if let Err(e) = std::fs::remove_file(&temp_path_clone) {
+            eprintln!("Warning: Failed to delete temp screenshot file {}: {}", temp_path_clone, e);
+        }
+
+        println!("Screenshot cropped successfully: {}", final_path_clone);
+    });
+
+    // Return immediately - the cropped file will be ready within 1-2 seconds
+    // Claude's MCP client will need to wait a moment before reading
     Ok(serde_json::json!({
         "success": true,
-        "path": path
+        "path": final_path,
+        "note": "Screenshot is being processed asynchronously. File will be ready within 1-2 seconds."
     }))
 }
 
