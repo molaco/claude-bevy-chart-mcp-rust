@@ -683,6 +683,37 @@ pub fn render_grid_and_axes(
     }
 }
 
+/// Helper function to set visibility for all crosshair elements
+fn set_crosshair_visibility(
+    crosshair_entities: &CrosshairEntities,
+    visibilities: &mut Query<&mut Visibility>,
+    target_visibility: Visibility,
+) {
+    for segment in &crosshair_entities.vertical_line_segments {
+        if let Ok(mut vis) = visibilities.get_mut(*segment) {
+            *vis = target_visibility;
+        }
+    }
+    for (_, segments) in &crosshair_entities.horizontal_lines {
+        for segment in segments {
+            if let Ok(mut vis) = visibilities.get_mut(*segment) {
+                *vis = target_visibility;
+            }
+        }
+    }
+    for (_, entity) in &crosshair_entities.price_labels {
+        if let Ok(mut vis) = visibilities.get_mut(*entity) {
+            *vis = target_visibility;
+        }
+    }
+    if let Ok(mut vis) = visibilities.get_mut(crosshair_entities.time_label) {
+        *vis = target_visibility;
+    }
+    if let Ok(mut vis) = visibilities.get_mut(crosshair_entities.ohlcv_box) {
+        *vis = target_visibility;
+    }
+}
+
 pub fn update_crosshair(
     crosshair_entities: Res<CrosshairEntities>,
     chart: Res<Chart>,
@@ -693,89 +724,48 @@ pub fn update_crosshair(
     mut texts: Query<&mut Text>,
     mut cursor_options: Query<&mut CursorOptions, With<Window>>,
 ) {
-    if !crosshair.enabled || chart.panes.is_empty() {
-        // Hide all crosshair elements and show cursor
-        for segment in &crosshair_entities.vertical_line_segments {
-            if let Ok(mut vis) = visibilities.get_mut(*segment) {
-                *vis = Visibility::Hidden;
-            }
-        }
-        for (_, segments) in &crosshair_entities.horizontal_lines {
-            for segment in segments {
-                if let Ok(mut vis) = visibilities.get_mut(*segment) {
-                    *vis = Visibility::Hidden;
-                }
-            }
-        }
-        for (_, entity) in &crosshair_entities.price_labels {
-            if let Ok(mut vis) = visibilities.get_mut(*entity) {
-                *vis = Visibility::Hidden;
-            }
-        }
-        if let Ok(mut vis) = visibilities.get_mut(crosshair_entities.time_label) {
-            *vis = Visibility::Hidden;
-        }
-        if let Ok(mut vis) = visibilities.get_mut(crosshair_entities.ohlcv_box) {
-            *vis = Visibility::Hidden;
-        }
-
-        // Show cursor when crosshair disabled
-        for mut opts in cursor_options.iter_mut() {
-            opts.visible = true;
-        }
-        return;
-    }
-
-    // Calculate total chart bounds (from top of first pane to bottom of last pane)
-    let first_pane = &chart.panes[0];
-    let last_pane = &chart.panes[chart.panes.len() - 1];
-    let chart_top = first_pane.space.viewport.max.y;
-    let chart_bottom = last_pane.space.viewport.min.y;
-    let chart_right = first_pane.space.viewport.max.x;
-
-    // Check if mouse is within any pane
-    let mouse_in_chart = chart.panes.iter().any(|pane| {
+    // ========== OPTIMIZATION: Calculate visibility state ONCE ==========
+    let mouse_in_chart = !chart.panes.is_empty() && chart.panes.iter().any(|pane| {
         pane.space.viewport.contains(interaction.mouse_pos)
     });
 
-    // Show cursor if: outside chart, dragging, or resizing
-    // Hide cursor only when: in chart AND not interacting
-    let should_hide_cursor = mouse_in_chart
+    let should_show_crosshair = crosshair.enabled
+        && !chart.panes.is_empty()
+        && mouse_in_chart
         && !interaction.dragging
         && interaction.hover_resize_gap.is_none()
         && interaction.resizing_gap.is_none();
 
+    // ========== OPTIMIZATION: Only update visibility on state change ==========
+    if interaction.crosshair_visible != should_show_crosshair {
+        interaction.crosshair_visible = should_show_crosshair;
+
+        let target_visibility = if should_show_crosshair {
+            Visibility::Visible
+        } else {
+            Visibility::Hidden
+        };
+
+        set_crosshair_visibility(&crosshair_entities, &mut visibilities, target_visibility);
+
+        #[cfg(debug_assertions)]
+        println!("Crosshair visibility changed: {}", should_show_crosshair);
+    }
+
+    // Update cursor visibility
+    let should_hide_cursor = should_show_crosshair;
     for mut opts in cursor_options.iter_mut() {
         opts.visible = !should_hide_cursor;
     }
 
-    if !mouse_in_chart {
-        // Hide all crosshair elements when mouse is outside chart
-        for segment in &crosshair_entities.vertical_line_segments {
-            if let Ok(mut vis) = visibilities.get_mut(*segment) {
-                *vis = Visibility::Hidden;
-            }
-        }
-        for (_, segments) in &crosshair_entities.horizontal_lines {
-            for segment in segments {
-                if let Ok(mut vis) = visibilities.get_mut(*segment) {
-                    *vis = Visibility::Hidden;
-                }
-            }
-        }
-        for (_, entity) in &crosshair_entities.price_labels {
-            if let Ok(mut vis) = visibilities.get_mut(*entity) {
-                *vis = Visibility::Hidden;
-            }
-        }
-        if let Ok(mut vis) = visibilities.get_mut(crosshair_entities.time_label) {
-            *vis = Visibility::Hidden;
-        }
-        if let Ok(mut vis) = visibilities.get_mut(crosshair_entities.ohlcv_box) {
-            *vis = Visibility::Hidden;
-        }
+    // Early return if crosshair should not be shown
+    if !should_show_crosshair {
         return;
     }
+
+    // ========== FROM HERE ON: Crosshair is visible, update positions ==========
+    let first_pane = &chart.panes[0];
+    let chart_right = first_pane.space.viewport.max.x;
 
     let mouse_x = interaction.mouse_pos.x;
     let mouse_y = interaction.mouse_pos.y;
@@ -786,82 +776,58 @@ pub fn update_crosshair(
     if mouse_moved {
         interaction.last_crosshair_mouse_pos = interaction.mouse_pos;
 
-        // ========== UPDATE VERTICAL CROSSHAIR LINE SEGMENTS ==========
+        // ========== UPDATE VERTICAL CROSSHAIR LINE POSITIONS ==========
         for segment in &crosshair_entities.vertical_line_segments {
             if let Ok(mut transform) = transforms.get_mut(*segment) {
                 transform.translation.x = mouse_x;
             }
-            if let Ok(mut vis) = visibilities.get_mut(*segment) {
-                *vis = Visibility::Visible;
-            }
+            // ✅ Visibility already set by state change handler above
         }
 
         // ========== UPDATE PER-PANE HORIZONTAL LINES & LABELS ==========
         for pane in &chart.panes {
-        let viewport = &pane.space.viewport;
+            let viewport = &pane.space.viewport;
 
-        // Find entities for this pane
-        let h_line_segments = crosshair_entities.horizontal_lines.iter()
-            .find(|(id, _)| *id == pane.id)
-            .map(|(_, segments)| segments);
-        let label_entity = crosshair_entities.price_labels.iter()
-            .find(|(id, _)| *id == pane.id)
-            .map(|(_, e)| *e);
+            // Find entities for this pane
+            let h_line_segments = crosshair_entities.horizontal_lines.iter()
+                .find(|(id, _)| *id == pane.id)
+                .map(|(_, segments)| segments);
+            let label_entity = crosshair_entities.price_labels.iter()
+                .find(|(id, _)| *id == pane.id)
+                .map(|(_, e)| *e);
 
-        // Check if mouse Y is within this pane
-        if mouse_y >= viewport.min.y && mouse_y <= viewport.max.y {
-            // Update horizontal line segments position
-            if let Some(segments) = h_line_segments {
-                for segment in segments {
-                    if let Ok(mut transform) = transforms.get_mut(*segment) {
-                        transform.translation.y = mouse_y;
-                    }
-                    if let Ok(mut vis) = visibilities.get_mut(*segment) {
-                        *vis = Visibility::Visible;
+            // Check if mouse Y is within this pane
+            if mouse_y >= viewport.min.y && mouse_y <= viewport.max.y {
+                // Update horizontal line segments position
+                if let Some(segments) = h_line_segments {
+                    for segment in segments {
+                        if let Ok(mut transform) = transforms.get_mut(*segment) {
+                            transform.translation.y = mouse_y;
+                        }
+                        // ✅ Visibility already set above
                     }
                 }
-            }
 
-            // Update price label
-            if crosshair.show_price_label {
-                if let Some(entity) = label_entity {
-                    let (_, value_at_cursor) = pane.space.from_world(
-                        interaction.mouse_pos,
-                        chart.visible_candle_start,
-                        chart.visible_candle_count
-                    );
+                // Update price label
+                if crosshair.show_price_label {
+                    if let Some(entity) = label_entity {
+                        let (_, value_at_cursor) = pane.space.from_world(
+                            interaction.mouse_pos,
+                            chart.visible_candle_start,
+                            chart.visible_candle_count
+                        );
 
-                    if let Ok(mut text) = texts.get_mut(entity) {
-                        text.0 = format!("{:.2}", value_at_cursor);
+                        if let Ok(mut text) = texts.get_mut(entity) {
+                            text.0 = format!("{:.2}", value_at_cursor);
+                        }
+                        if let Ok(mut transform) = transforms.get_mut(entity) {
+                            transform.translation.y = mouse_y;
+                        }
+                        // ✅ Visibility already set above
                     }
-                    if let Ok(mut transform) = transforms.get_mut(entity) {
-                        transform.translation.y = mouse_y;
-                    }
-                    if let Ok(mut vis) = visibilities.get_mut(entity) {
-                        *vis = Visibility::Visible;
-                    }
-                }
-            } else if let Some(entity) = label_entity {
-                if let Ok(mut vis) = visibilities.get_mut(entity) {
-                    *vis = Visibility::Hidden;
-                }
-            }
-        } else {
-            // Mouse not in this pane, hide its elements
-            if let Some(segments) = h_line_segments {
-                for segment in segments {
-                    if let Ok(mut vis) = visibilities.get_mut(*segment) {
-                        *vis = Visibility::Hidden;
-                    }
-                }
-            }
-            if let Some(entity) = label_entity {
-                if let Ok(mut vis) = visibilities.get_mut(entity) {
-                    *vis = Visibility::Hidden;
                 }
             }
         }
-    }
     } // End of mouse_moved check
 
     // ========== FIND CANDLE AT CURSOR ==========
@@ -872,13 +838,6 @@ pub fn update_crosshair(
     };
 
     if candle_index >= chart.candles.len() {
-        // Hide time label and OHLCV box if no valid candle
-        if let Ok(mut vis) = visibilities.get_mut(crosshair_entities.time_label) {
-            *vis = Visibility::Hidden;
-        }
-        if let Ok(mut vis) = visibilities.get_mut(crosshair_entities.ohlcv_box) {
-            *vis = Visibility::Hidden;
-        }
         interaction.last_crosshair_candle_index = None;
         return;
     }
@@ -890,7 +849,7 @@ pub fn update_crosshair(
         interaction.last_crosshair_candle_index = Some(candle_index);
         let candle = &chart.candles[candle_index];
 
-        // ========== UPDATE TIME LABEL (only when candle changes) ==========
+        // ========== UPDATE TIME LABEL TEXT (only when candle changes) ==========
         if crosshair.show_time_label {
             let datetime = DateTime::<Utc>::from_timestamp(candle.time / 1000, 0)
                 .unwrap_or_default();
@@ -901,7 +860,7 @@ pub fn update_crosshair(
             }
         }
 
-        // ========== UPDATE OHLCV INFO BOX (only when candle changes) ==========
+        // ========== UPDATE OHLCV INFO BOX TEXT (only when candle changes) ==========
         if crosshair.show_ohlcv_box {
             let info_text = format!(
                 "O: {:.2}  H: {:.2}  L: {:.2}  C: {:.2}\nVol: {:.2}",
@@ -914,30 +873,12 @@ pub fn update_crosshair(
         }
     }
 
-    // ========== UPDATE POSITIONS & VISIBILITY (every frame) ==========
-    // Time label position
-    if crosshair.show_time_label {
+    // ========== UPDATE TIME LABEL POSITION (when mouse moves) ==========
+    if mouse_moved && crosshair.show_time_label {
         if let Ok(mut transform) = transforms.get_mut(crosshair_entities.time_label) {
             transform.translation.x = mouse_x;
         }
-        if let Ok(mut vis) = visibilities.get_mut(crosshair_entities.time_label) {
-            *vis = Visibility::Visible;
-        }
-    } else {
-        if let Ok(mut vis) = visibilities.get_mut(crosshair_entities.time_label) {
-            *vis = Visibility::Hidden;
-        }
-    }
-
-    // OHLCV box visibility
-    if crosshair.show_ohlcv_box {
-        if let Ok(mut vis) = visibilities.get_mut(crosshair_entities.ohlcv_box) {
-            *vis = Visibility::Visible;
-        }
-    } else {
-        if let Ok(mut vis) = visibilities.get_mut(crosshair_entities.ohlcv_box) {
-            *vis = Visibility::Hidden;
-        }
+        // ✅ Visibility already set by state change handler above
     }
 }
 

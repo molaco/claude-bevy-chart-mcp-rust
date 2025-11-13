@@ -677,6 +677,8 @@ pub struct InteractionState {
     pub last_crosshair_candle_index: Option<usize>,
     // Track last mouse position to avoid redundant crosshair updates
     pub last_crosshair_mouse_pos: Vec2,
+    // Cache crosshair visibility state to avoid redundant ECS updates
+    pub crosshair_visible: bool,
 }
 
 /// Volume pane toggle state
