@@ -23,6 +23,7 @@ impl Plugin for ChatUiPlugin {
                 input::handle_text_submit,
                 messages::update_message_display,
                 messages::auto_scroll_to_bottom,
+                messages::handle_scroll_input,
                 claude::send_to_claude,
                 claude::receive_from_claude,
             ));

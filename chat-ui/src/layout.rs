@@ -36,7 +36,7 @@ pub fn setup_chat_ui(mut commands: Commands) {
                     width: Val::Percent(100.0),
                     flex_grow: 1.0,
                     flex_direction: FlexDirection::Column,
-                    overflow: Overflow::clip_y(),
+                    overflow: Overflow::scroll_y(),
                     padding: UiRect::all(Val::Px(10.0)),
                     margin: UiRect::bottom(Val::Px(10.0)),
                     border: UiRect::all(Val::Px(2.0)),
