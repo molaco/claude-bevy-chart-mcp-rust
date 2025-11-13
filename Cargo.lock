@@ -1952,6 +1952,8 @@ dependencies = [
  "bevy_ui_text_input",
  "claude-agent-sdk",
  "futures",
+ "reqwest",
+ "serde_json",
  "tokio",
 ]
 

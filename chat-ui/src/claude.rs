@@ -1,7 +1,12 @@
 use bevy::prelude::*;
 use bevy_tokio_tasks::TokioTasksRuntime;
 use claude_agent_sdk::{ClaudeSDKClient, ClaudeAgentOptions, Message as ClaudeMessage, ContentBlock};
+use claude_agent_sdk::mcp::{SdkMcpServer, SdkMcpTool, ToolResult};
+use claude_agent_sdk::types::{McpServerConfig, SdkMcpServerMarker, PermissionMode};
 use tokio::sync::mpsc;
+use serde_json::json;
+use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::components::{ChatState, ChatMessage};
 
@@ -12,6 +17,78 @@ pub struct ClaudeClient {
     sender: mpsc::UnboundedSender<String>,
     /// Channel to receive responses from the Claude client task
     receiver: mpsc::UnboundedReceiver<String>,
+}
+
+/// Create an SDK MCP server with chart tools
+fn create_chart_tools_mcp_server() -> SdkMcpServer {
+    SdkMcpServer::new("chart_tools")
+        .version("1.0.0")
+        .tool(SdkMcpTool::new(
+            "take_chart_screenshot",
+            "Take a screenshot of the current chart visualization. Use this when you need to see the actual visual state of the chart.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Optional custom filename for the screenshot (without extension)"
+                    }
+                }
+            }),
+            |input| {
+                Box::pin(async move {
+                    let path = input.get("path")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+
+                    // Call BRP endpoint to trigger screenshot via Bevy Remote Protocol
+                    // BRP expects JSON-RPC 2.0 format
+                    let client = reqwest::Client::new();
+                    let brp_request = json!({
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "chart/screenshot",
+                        "params": if let Some(p) = &path {
+                            json!({ "path": p })
+                        } else {
+                            json!({})
+                        }
+                    });
+
+                    let response = client
+                        .post("http://127.0.0.1:15702")
+                        .json(&brp_request)
+                        .send()
+                        .await
+                        .map_err(|e| std::io::Error::new(
+                            std::io::ErrorKind::Other,
+                            format!("Failed to call BRP endpoint: {}", e)
+                        ))?;
+
+                    let result: serde_json::Value = response
+                        .json()
+                        .await
+                        .map_err(|e| std::io::Error::new(
+                            std::io::ErrorKind::Other,
+                            format!("Failed to parse response: {}", e)
+                        ))?;
+
+                    // BRP returns JSON-RPC format: { "result": { "success": true, "path": "..." } }
+                    let filename = result["result"]["path"]
+                        .as_str()
+                        .ok_or_else(|| std::io::Error::new(
+                            std::io::ErrorKind::Other,
+                            format!("No path in BRP response: {:?}", result)
+                        ))?;
+
+                    println!("📸 [CHART TOOLS] Screenshot saved: {}", filename);
+                    Ok(ToolResult::text(format!(
+                        "Screenshot successfully saved to: {}\n\nYou can now analyze this image to see the chart's visual state.",
+                        filename
+                    )))
+                })
+            },
+        ))
 }
 
 /// Initialize the Claude client and spawn the background task
@@ -27,10 +104,24 @@ pub fn init_claude_client(mut commands: Commands, runtime: ResMut<TokioTasksRunt
     // The task is spawned in the background and runs independently
     runtime.spawn_background_task(|_ctx| async move {
 
+        // Create SDK MCP server for chart tools
+        let screenshot_server = create_chart_tools_mcp_server();
+
+        let mut mcp_servers = HashMap::new();
+        mcp_servers.insert(
+            "chart_tools".to_string(),
+            McpServerConfig::Sdk(SdkMcpServerMarker {
+                name: "chart_tools".to_string(),
+                instance: Arc::new(screenshot_server),
+            }),
+        );
+
         // Build options for the Claude client
         let options = ClaudeAgentOptions::builder()
-            .system_prompt("You are a helpful chart analysis assistant. You help users understand and analyze financial charts and data. Be concise and clear in your explanations.")
+            .system_prompt("You are a helpful chart analysis assistant. You help users understand and analyze financial charts and data. Be concise and clear in your explanations.\n\nYou have access to a tool called 'take_chart_screenshot' that can capture the current visual state of the chart. Use this tool when the user asks about the chart's visual appearance or when you need to see what's currently displayed.")
             .max_turns(50)
+            .mcp_servers(mcp_servers)
+            .permission_mode(PermissionMode::BypassPermissions)
             .build();
 
         // Create the Claude SDK client
@@ -70,11 +161,16 @@ pub fn init_claude_client(mut commands: Commands, runtime: ResMut<TokioTasksRunt
                                 ContentBlock::Thinking { thinking: _, .. } => {
                                     // Claude's extended thinking - log but don't display
                                 }
-                                ContentBlock::ToolUse { name: _, input: _, .. } => {
-                                    // Log tool usage
+                                ContentBlock::ToolUse { name, input, .. } => {
+                                    // Log tool usage and optionally show to user
+                                    println!("🔧 [TOOL USE] {} with input: {:?}", name, input);
+                                    if name == "take_chart_screenshot" {
+                                        full_response.push_str("\n[Taking screenshot...]\n");
+                                    }
                                 }
-                                ContentBlock::ToolResult { content: _, .. } => {
+                                ContentBlock::ToolResult { content, .. } => {
                                     // Log tool results
+                                    println!("✅ [TOOL RESULT] {:?}", content);
                                 }
                             }
                         }

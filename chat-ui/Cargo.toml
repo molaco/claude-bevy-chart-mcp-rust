@@ -32,6 +32,8 @@ claude-agent-sdk = { path = "../claude-agent-sdk-rust" }
 tokio = { version = "1", features = ["full"] }
 futures = "0.3"
 bevy-tokio-tasks = "0.17"
+reqwest = { version = "0.12", features = ["json"] }
+serde_json = "1.0"
 
 [[example]]
 name = "simple"
