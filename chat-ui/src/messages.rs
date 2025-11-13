@@ -45,17 +45,25 @@ pub fn update_message_display(
                 parent.spawn((
                     Node {
                         width: Val::Percent(100.0),
-                        margin: UiRect::bottom(Val::Px(4.0)),  // Tight spacing
+                        flex_direction: FlexDirection::Column,  // Stack prefix and content vertically
+                        margin: UiRect::bottom(Val::Px(12.0)),  // Increased spacing
+                        padding: UiRect::left(Val::Px(6.0)),     // Left padding for visual grouping
                         ..default()
                     },
                     ChatMessageEntity { index },
                 ))
                 .with_children(|message_node| {
-                    // Spawn as single text with prefix
+                    // Spawn prefix text with dimmed color
                     message_node.spawn((
-                        Text::new(format!("{}{}", prefix, message.content)),
+                        Text::new(prefix),
                         TextFont::from_font_size(16.0),
-                        TextColor(text_color),
+                        TextColor(Color::srgb(0.6, 0.6, 0.62)),  // Dimmed color for prefix
+                    ));
+                    // Spawn message content with regular color
+                    message_node.spawn((
+                        Text::new(message.content.clone()),
+                        TextFont::from_font_size(16.0),
+                        TextColor(text_color),  // Regular bright color for content
                     ));
                 });
             });
@@ -70,7 +78,9 @@ pub fn update_message_display(
                 parent.spawn((
                     Node {
                         width: Val::Percent(100.0),
-                        margin: UiRect::bottom(Val::Px(4.0)),
+                        flex_direction: FlexDirection::Column,  // Consistent with message layout
+                        margin: UiRect::bottom(Val::Px(12.0)),  // Increased spacing to match messages
+                        padding: UiRect::left(Val::Px(6.0)),     // Left padding for visual grouping
                         ..default()
                     },
                     LoadingIndicator,

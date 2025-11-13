@@ -2,6 +2,7 @@ use crate::components::*;
 use bevy::input_focus::AutoFocus;
 use bevy::prelude::*;
 use bevy_ui_text_input::{TextInputMode, TextInputNode};
+use cosmic_text::Wrap;
 
 /// Marker component to identify the chat UI container
 #[derive(Component)]
@@ -71,7 +72,7 @@ pub fn setup_chat_ui(mut commands: Commands) {
                         TextInputNode {
                             clear_on_submit: true,
                             unfocus_on_submit: false,
-                            mode: TextInputMode::SingleLine,
+                            mode: TextInputMode::MultiLine { wrap: Wrap::Word },
                             ..default()
                         },
                         Node {
