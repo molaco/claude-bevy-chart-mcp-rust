@@ -7,6 +7,7 @@ pub fn update_message_display(
     chat_state: Res<ChatState>,
     message_container: Query<(Entity, Option<&Children>), With<MessageContainer>>,
     existing_messages: Query<&ChatMessageEntity>,
+    loading_indicator: Query<(Entity, Option<&Children>), With<LoadingIndicator>>,
 ) {
     // Return early if chat_state hasn't changed
     if !chat_state.is_changed() {
@@ -58,6 +59,42 @@ pub fn update_message_display(
                     ));
                 });
             });
+        }
+    }
+
+    // Handle loading indicator
+    if chat_state.is_waiting {
+        // Add loading indicator if not already present
+        if loading_indicator.is_empty() {
+            commands.entity(container_entity).with_children(|parent| {
+                parent.spawn((
+                    Node {
+                        width: Val::Percent(100.0),
+                        margin: UiRect::bottom(Val::Px(4.0)),
+                        ..default()
+                    },
+                    LoadingIndicator,
+                ))
+                .with_children(|loading_node| {
+                    loading_node.spawn((
+                        Text::new("Claude is thinking..."),
+                        TextFont::from_font_size(16.0),
+                        TextColor(Color::srgb(0.6, 0.7, 0.9)),  // Soft blue color for distinction
+                    ));
+                });
+            });
+        }
+    } else {
+        // Remove loading indicator if present
+        for (entity, children_opt) in loading_indicator.iter() {
+            // First despawn all children (text nodes)
+            if let Some(children) = children_opt {
+                for child in children.iter() {
+                    commands.entity(child).despawn();
+                }
+            }
+            // Then despawn the loading indicator itself
+            commands.entity(entity).despawn();
         }
     }
 }
