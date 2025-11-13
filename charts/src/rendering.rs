@@ -28,15 +28,11 @@ fn format_volume(value: f32) -> String {
 pub fn render_candlesticks(
     mut commands: Commands,
     chart: Res<Chart>,
-    query: Query<Entity, With<PriceElement>>,
+    mut query_wicks: Query<(Entity, &CandlestickWick, &mut Transform, &mut Sprite), Without<CandlestickBody>>,
+    mut query_bodies: Query<(Entity, &CandlestickBody, &mut Transform, &mut Sprite), Without<CandlestickWick>>,
 ) {
     if !chart.needs_redraw {
         return;
-    }
-
-    // Despawn all existing price elements
-    for entity in query.iter() {
-        commands.entity(entity).despawn();
     }
 
     // Find the Price pane
@@ -56,6 +52,23 @@ pub fn render_candlesticks(
         return;
     }
 
+    // Collect existing entities by candle_index (using without_mut to avoid borrow conflicts)
+    use std::collections::HashMap;
+    let mut existing_wicks: HashMap<usize, Entity> = HashMap::new();
+    let mut existing_bodies: HashMap<usize, Entity> = HashMap::new();
+
+    for (entity, wick, _, _) in query_wicks.iter() {
+        existing_wicks.insert(wick.candle_index, entity);
+    }
+    for (entity, body, _, _) in query_bodies.iter() {
+        existing_bodies.insert(body.candle_index, entity);
+    }
+
+    // Track which entities we updated (to avoid despawning them)
+    let mut updated_wicks = std::collections::HashSet::new();
+    let mut updated_bodies = std::collections::HashSet::new();
+
+    // Process each visible candle
     for i in start..end {
         let candle = &chart.candles[i];
 
@@ -83,20 +96,32 @@ pub fn render_candlesticks(
         );
         let wick_height = (wick_top.y - wick_bottom.y).abs().max(1.0);
 
-        // Spawn wick entity (thin line, Z=0)
-        commands.spawn((
-            Sprite {
-                color: Color::srgb(0.5, 0.5, 0.5),
-                custom_size: Some(Vec2::new(1.0, wick_height)),
-                ..default()
-            },
-            Transform::from_translation(wick_center.extend(0.0)),
-            CandlestickWick { candle_index: i },
-            PriceElement,
-            PaneId::Price,
-        ));
+        // UPDATE or SPAWN wick entity
+        if let Some(&entity) = existing_wicks.get(&i) {
+            // Update existing wick
+            if let Ok((_, _, mut transform, mut sprite)) = query_wicks.get_mut(entity) {
+                transform.translation = wick_center.extend(0.0);
+                if let Some(ref mut size) = sprite.custom_size {
+                    *size = Vec2::new(1.0, wick_height);
+                }
+            }
+            updated_wicks.insert(i);
+        } else {
+            // Spawn new wick entity
+            commands.spawn((
+                Sprite {
+                    color: Color::srgb(0.5, 0.5, 0.5),
+                    custom_size: Some(Vec2::new(1.0, wick_height)),
+                    ..default()
+                },
+                Transform::from_translation(wick_center.extend(0.0)),
+                CandlestickWick { candle_index: i },
+                PriceElement,
+                PaneId::Price,
+            ));
+        }
 
-        // Spawn body entity (rectangle, Z=1 above wick)
+        // Calculate body properties
         let body_width = price_pane.space.candle_width_px * 0.7;
         let body_height = (body_close.y - body_open.y).abs().max(1.0);
         let body_center = Vec2::new(
@@ -110,39 +135,65 @@ pub fn render_candlesticks(
             Color::srgb(0.9, 0.2, 0.2)  // Red
         };
 
-        commands.spawn((
-            Sprite {
-                color: body_color,
-                custom_size: Some(Vec2::new(body_width, body_height)),
-                ..default()
-            },
-            Transform::from_translation(body_center.extend(1.0)),
-            CandlestickBody { candle_index: i },
-            PriceElement,
-            PaneId::Price,
-        ));
+        // UPDATE or SPAWN body entity
+        if let Some(&entity) = existing_bodies.get(&i) {
+            // Update existing body
+            if let Ok((_, _, mut transform, mut sprite)) = query_bodies.get_mut(entity) {
+                transform.translation = body_center.extend(1.0);
+                sprite.color = body_color;
+                if let Some(ref mut size) = sprite.custom_size {
+                    *size = Vec2::new(body_width, body_height);
+                }
+            }
+            updated_bodies.insert(i);
+        } else {
+            // Spawn new body entity
+            commands.spawn((
+                Sprite {
+                    color: body_color,
+                    custom_size: Some(Vec2::new(body_width, body_height)),
+                    ..default()
+                },
+                Transform::from_translation(body_center.extend(1.0)),
+                CandlestickBody { candle_index: i },
+                PriceElement,
+                PaneId::Price,
+            ));
+        }
     }
 
+    // Despawn entities that are no longer visible
+    for (index, entity) in existing_wicks.iter() {
+        if !updated_wicks.contains(index) {
+            commands.entity(*entity).despawn();
+        }
+    }
+    for (index, entity) in existing_bodies.iter() {
+        if !updated_bodies.contains(index) {
+            commands.entity(*entity).despawn();
+        }
+    }
+
+    #[cfg(debug_assertions)]
     println!(
-        "Rendered {} candles (indices {}-{})",
+        "Rendered {} candles (indices {}-{}), updated: {} wicks + {} bodies, spawned: {}, despawned: {}",
         end - start,
         start,
-        end - 1
+        end - 1,
+        updated_wicks.len(),
+        updated_bodies.len(),
+        (end - start) * 2 - (updated_wicks.len() + updated_bodies.len()),
+        (existing_wicks.len() - updated_wicks.len()) + (existing_bodies.len() - updated_bodies.len())
     );
 }
 
 pub fn render_volume_bars(
     mut commands: Commands,
     chart: Res<Chart>,
-    query: Query<Entity, With<VolumeElement>>,
+    mut query: Query<(Entity, &VolumeBar, &mut Transform, &mut Sprite)>,
 ) {
     if !chart.needs_redraw {
         return;
-    }
-
-    // Despawn all existing volume bars
-    for entity in query.iter() {
-        commands.entity(entity).despawn();
     }
 
     // Find the Volume pane
@@ -162,6 +213,18 @@ pub fn render_volume_bars(
         return;
     }
 
+    // Collect existing entities by candle_index
+    use std::collections::{HashMap, HashSet};
+    let mut existing_bars: HashMap<usize, Entity> = HashMap::new();
+
+    for (entity, bar, _, _) in query.iter() {
+        existing_bars.insert(bar.candle_index, entity);
+    }
+
+    // Track which entities we updated
+    let mut updated_bars = HashSet::new();
+
+    // Process each visible candle
     for i in start..end {
         let candle = &chart.candles[i];
 
@@ -189,24 +252,49 @@ pub fn render_volume_bars(
             Color::srgba(0.9, 0.2, 0.2, 0.6)  // Red with transparency
         };
 
-        commands.spawn((
-            Sprite {
+        // UPDATE or SPAWN volume bar entity
+        if let Some(&entity) = existing_bars.get(&i) {
+            // Update existing bar
+            if let Ok((_, _, mut transform, mut sprite)) = query.get_mut(entity) {
+                transform.translation = bar_center.extend(0.0);
+                sprite.color = bar_color;
+                if let Some(ref mut size) = sprite.custom_size {
+                    *size = Vec2::new(bar_width, bar_height);
+                }
+            }
+            updated_bars.insert(i);
+        } else {
+            // Spawn new bar entity
+            commands.spawn((
+                Sprite {
                     color: bar_color,
                     custom_size: Some(Vec2::new(bar_width, bar_height)),
                     ..default()
                 },
-            Transform::from_translation(bar_center.extend(0.0)),
-            VolumeBar { candle_index: i },
-            VolumeElement,
-            PaneId::Volume,
-        ));
+                Transform::from_translation(bar_center.extend(0.0)),
+                VolumeBar { candle_index: i },
+                VolumeElement,
+                PaneId::Volume,
+            ));
+        }
     }
 
+    // Despawn entities that are no longer visible
+    for (index, entity) in existing_bars.iter() {
+        if !updated_bars.contains(index) {
+            commands.entity(*entity).despawn();
+        }
+    }
+
+    #[cfg(debug_assertions)]
     println!(
-        "Rendered {} volume bars (indices {}-{})",
+        "Rendered {} volume bars (indices {}-{}), updated: {}, spawned: {}, despawned: {}",
         end - start,
         start,
-        end - 1
+        end - 1,
+        updated_bars.len(),
+        (end - start) - updated_bars.len(),
+        existing_bars.len() - updated_bars.len()
     );
 }
 
