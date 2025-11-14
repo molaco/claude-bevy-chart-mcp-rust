@@ -683,34 +683,43 @@ pub fn render_grid_and_axes(
     }
 }
 
-/// Helper function to set visibility for all crosshair elements
+/// Helper function to set visibility for GLOBAL crosshair elements
+/// Note: Does NOT set visibility for per-pane elements (horizontal lines, price labels)
+/// as those require selective visibility based on mouse Y position
 fn set_crosshair_visibility(
     crosshair_entities: &CrosshairEntities,
     visibilities: &mut Query<&mut Visibility>,
     target_visibility: Visibility,
 ) {
+    // Vertical line (global - spans all panes)
     for segment in &crosshair_entities.vertical_line_segments {
         if let Ok(mut vis) = visibilities.get_mut(*segment) {
             *vis = target_visibility;
         }
     }
-    for (_, segments) in &crosshair_entities.horizontal_lines {
-        for segment in segments {
-            if let Ok(mut vis) = visibilities.get_mut(*segment) {
-                *vis = target_visibility;
-            }
-        }
-    }
-    for (_, entity) in &crosshair_entities.price_labels {
-        if let Ok(mut vis) = visibilities.get_mut(*entity) {
-            *vis = target_visibility;
-        }
-    }
+    // Time label (global)
     if let Ok(mut vis) = visibilities.get_mut(crosshair_entities.time_label) {
         *vis = target_visibility;
     }
+    // OHLCV box (global)
     if let Ok(mut vis) = visibilities.get_mut(crosshair_entities.ohlcv_box) {
         *vis = target_visibility;
+    }
+
+    // Hide per-pane elements when crosshair is globally hidden
+    if target_visibility == Visibility::Hidden {
+        for (_, segments) in &crosshair_entities.horizontal_lines {
+            for segment in segments {
+                if let Ok(mut vis) = visibilities.get_mut(*segment) {
+                    *vis = Visibility::Hidden;
+                }
+            }
+        }
+        for (_, entity) in &crosshair_entities.price_labels {
+            if let Ok(mut vis) = visibilities.get_mut(*entity) {
+                *vis = Visibility::Hidden;
+            }
+        }
     }
 }
 
@@ -798,13 +807,15 @@ pub fn update_crosshair(
 
             // Check if mouse Y is within this pane
             if mouse_y >= viewport.min.y && mouse_y <= viewport.max.y {
-                // Update horizontal line segments position
+                // Update horizontal line segments position AND show them
                 if let Some(segments) = h_line_segments {
                     for segment in segments {
                         if let Ok(mut transform) = transforms.get_mut(*segment) {
                             transform.translation.y = mouse_y;
                         }
-                        // ✅ Visibility already set above
+                        if let Ok(mut vis) = visibilities.get_mut(*segment) {
+                            *vis = Visibility::Visible;
+                        }
                     }
                 }
 
@@ -823,7 +834,27 @@ pub fn update_crosshair(
                         if let Ok(mut transform) = transforms.get_mut(entity) {
                             transform.translation.y = mouse_y;
                         }
-                        // ✅ Visibility already set above
+                        if let Ok(mut vis) = visibilities.get_mut(entity) {
+                            *vis = Visibility::Visible;
+                        }
+                    }
+                } else if let Some(entity) = label_entity {
+                    if let Ok(mut vis) = visibilities.get_mut(entity) {
+                        *vis = Visibility::Hidden;
+                    }
+                }
+            } else {
+                // Mouse NOT in this pane - hide horizontal lines and label
+                if let Some(segments) = h_line_segments {
+                    for segment in segments {
+                        if let Ok(mut vis) = visibilities.get_mut(*segment) {
+                            *vis = Visibility::Hidden;
+                        }
+                    }
+                }
+                if let Some(entity) = label_entity {
+                    if let Ok(mut vis) = visibilities.get_mut(entity) {
+                        *vis = Visibility::Hidden;
                     }
                 }
             }
