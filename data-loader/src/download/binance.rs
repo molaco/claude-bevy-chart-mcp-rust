@@ -854,20 +854,30 @@ fn parse_kline_row(record: &csv::StringRecord) -> Option<Kline> {
 
 /// Parse a trade CSV row
 fn parse_trade_row(record: &csv::StringRecord) -> Option<Trade> {
-    if record.len() < 6 {
+    if record.len() < 7 {
         log::warn!(
-            "Invalid trade row: expected at least 6 columns, got {}",
+            "Invalid trade row: expected at least 7 columns, got {}",
             record.len()
         );
         return None;
     }
 
-    // Binance aggTrades CSV format:
-    // agg_trade_id, price, quantity, first_trade_id, last_trade_id, timestamp, is_buyer_maker
+    // Binance aggTrades CSV format (8 columns):
+    // agg_trade_id, price, quantity, first_trade_id, last_trade_id, timestamp, is_buyer_maker, is_best_match
     let time = record.get(5)?.parse::<u64>().ok()?;
     let price = record.get(1)?.parse::<f32>().ok()?;
     let qty = record.get(2)?.parse::<f32>().ok()?;
-    let is_buyer_maker = record.get(6)?.parse::<bool>().ok()?;
+
+    // Binance uses "True"/"False" (capital T/F), not "true"/"false"
+    let is_buyer_maker_str = record.get(6)?;
+    let is_buyer_maker = match is_buyer_maker_str {
+        "True" | "true" => true,
+        "False" | "false" => false,
+        _ => {
+            log::warn!("Invalid is_buyer_maker value: {}", is_buyer_maker_str);
+            return None;
+        }
+    };
 
     Some(Trade {
         time,

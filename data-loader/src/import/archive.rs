@@ -68,18 +68,37 @@ impl ProgressTracker {
     }
 }
 
-/// Parses Binance ZIP archives and bulk-loads trades into database
+/// Data type to import
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DataType {
+    Trades,
+    Klines,
+}
+
+/// Parses Binance ZIP archives and bulk-loads trades or klines into database
 pub struct ArchiveImporter {
     batch_size: usize,
     dry_run: bool,
+    data_type: DataType,
 }
 
 impl ArchiveImporter {
-    pub fn new(batch_size: usize, dry_run: bool) -> Self {
+    pub fn new(batch_size: usize, dry_run: bool, data_type: DataType) -> Self {
         Self {
             batch_size,
             dry_run,
+            data_type,
         }
+    }
+
+    /// Create a new importer for trades
+    pub fn new_for_trades(batch_size: usize, dry_run: bool) -> Self {
+        Self::new(batch_size, dry_run, DataType::Trades)
+    }
+
+    /// Create a new importer for klines
+    pub fn new_for_klines(batch_size: usize, dry_run: bool) -> Self {
+        Self::new(batch_size, dry_run, DataType::Klines)
     }
 
     /// Walk directory tree finding all ZIP files and import each one
@@ -185,7 +204,14 @@ impl ArchiveImporter {
             let file = archive.by_index(i)
                 .context("Failed to access archive entry")?;
 
-            let count = match self.stream_csv_insert(conn, file, ticker_id) {
+            // Extract timeframe from path for klines
+            let timeframe = if self.data_type == DataType::Klines {
+                self.extract_timeframe_from_path(zip_path).unwrap_or_else(|_| "1h".to_string())
+            } else {
+                String::new()
+            };
+
+            let count = match self.stream_csv_insert(conn, file, ticker_id, &timeframe) {
                 Ok(c) => c,
                 Err(e) => {
                     let err_msg = format!("Failed to process CSV: {}", e);
@@ -198,6 +224,25 @@ impl ArchiveImporter {
         }
 
         Ok(stats)
+    }
+
+    /// Extract timeframe from klines archive path
+    ///
+    /// Path format for klines: .../klines/BTCUSDT/1h/BTCUSDT-1h-2024-01-01.zip
+    /// Returns timeframe (e.g., "1h", "1d")
+    fn extract_timeframe_from_path(&self, zip_path: &Path) -> Result<String> {
+        let file_name = zip_path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .context("Invalid file name")?;
+
+        // Extract timeframe from filename (e.g., BTCUSDT-1h-2024-01-01.zip)
+        let parts: Vec<&str> = file_name.split('-').collect();
+        if parts.len() >= 2 {
+            Ok(parts[1].to_string())
+        } else {
+            anyhow::bail!("Cannot extract timeframe from filename: {}", file_name);
+        }
     }
 
     /// Extract symbol and exchange from Binance archive filesystem path
@@ -240,16 +285,44 @@ impl ArchiveImporter {
         conn: &mut Connection,
         reader: R,
         ticker_id: i64,
+        timeframe: &str,
     ) -> Result<usize> {
-        let tx = conn.transaction()
-            .context("Failed to start transaction")?;
+        match self.data_type {
+            DataType::Trades => self.stream_trades_csv(conn, reader, ticker_id),
+            DataType::Klines => self.stream_klines_csv(conn, reader, ticker_id, timeframe),
+        }
+    }
+
+    /// Stream trades CSV records and insert in batches using Appender API
+    fn stream_trades_csv<R: Read>(
+        &self,
+        conn: &mut Connection,
+        reader: R,
+        ticker_id: i64,
+    ) -> Result<usize> {
+        // Create temporary table for bulk loading
+        let temp_table = format!("temp_trades_{}", std::process::id());
+        conn.execute_batch(&format!(
+            "CREATE TEMPORARY TABLE {} (
+                trade_id BIGINT,
+                ticker_id INTEGER,
+                timestamp BIGINT,
+                price DECIMAL(18,8),
+                quantity DECIMAL(18,8),
+                is_buyer_maker BOOLEAN
+            )",
+            temp_table
+        ))
+        .context("Failed to create temp table")?;
+
+        // Use Appender for bulk loading into temp table
+        let mut appender = conn.appender(&temp_table)
+            .context("Failed to create appender")?;
 
         let mut csv_reader = csv::ReaderBuilder::new()
             .has_headers(false)
             .from_reader(reader);
 
-        let mut batch = Vec::new();
-        let mut count = 0;
         let mut trade_counter: u64 = 0;
 
         for result in csv_reader.records() {
@@ -264,56 +337,163 @@ impl ArchiveImporter {
             // agg_trade_id, price, quantity, first_trade_id, last_trade_id, timestamp, is_buyer_maker
             let _trade_id: i64 = record[0].parse().unwrap_or(0);
             let price: f64 = record[1].parse().unwrap_or(0.0);
-            let quantity: f32 = record[2].parse().unwrap_or(0.0);
+            let quantity: f64 = record[2].parse().unwrap_or(0.0);
             let timestamp: i64 = record[5].parse().unwrap_or(0);
             let is_buyer_maker: bool = record[6].parse().unwrap_or(false);
-            let is_sell = is_buyer_maker; // Buyer maker means it's a sell
 
             // Generate deterministic ID for idempotent inserts
             let db_trade_id = generate_trade_id(ticker_id, timestamp as u64, trade_counter);
             trade_counter += 1;
 
-            batch.push((db_trade_id, ticker_id, timestamp, price, quantity, is_sell));
-
-            if batch.len() >= self.batch_size {
-                self.insert_trade_batch(&tx, &batch)?;
-                count += batch.len();
-                batch.clear();
-            }
+            appender.append_row(duckdb::params![
+                db_trade_id,
+                ticker_id,
+                timestamp,
+                price,
+                quantity,
+                is_buyer_maker
+            ])
+            .context("Failed to append trade row")?;
         }
 
-        // Insert remaining batch
-        if !batch.is_empty() {
-            self.insert_trade_batch(&tx, &batch)?;
-            count += batch.len();
-        }
+        // Flush appender to commit data to temp table
+        appender.flush()
+            .context("Failed to flush appender")?;
 
-        tx.commit()
-            .context("Failed to commit trades transaction")?;
+        // Drop appender to release lock
+        drop(appender);
 
-        Ok(count)
+        // Upsert from temp table to main table
+        let rows_affected = conn.execute(
+            &format!(
+                "INSERT INTO trades (trade_id, ticker_id, timestamp, price, quantity, is_buyer_maker)
+                 SELECT trade_id, ticker_id, timestamp, price, quantity, is_buyer_maker
+                 FROM {}
+                 ON CONFLICT (trade_id) DO UPDATE SET
+                     price = EXCLUDED.price,
+                     quantity = EXCLUDED.quantity,
+                     is_buyer_maker = EXCLUDED.is_buyer_maker",
+                temp_table
+            ),
+            [],
+        )
+        .context("Failed to upsert from temp table")?;
+
+        // Drop temp table
+        conn.execute_batch(&format!("DROP TABLE {}", temp_table))
+            .context("Failed to drop temp table")?;
+
+        Ok(rows_affected)
     }
 
-    fn insert_trade_batch(
+    /// Stream klines CSV records and insert in batches using Appender API
+    fn stream_klines_csv<R: Read>(
         &self,
-        conn: &duckdb::Transaction,
-        batch: &[(i64, i64, i64, f64, f32, bool)],
-    ) -> Result<()> {
-        let mut stmt = conn
-            .prepare(
-                "INSERT OR REPLACE INTO trades
-                 (trade_id, ticker_id, timestamp, price, quantity, is_sell)
-                 VALUES (?, ?, ?, ?, ?, ?)",
-            )
-            .context("Failed to prepare statement")?;
+        conn: &mut Connection,
+        reader: R,
+        ticker_id: i64,
+        timeframe: &str,
+    ) -> Result<usize> {
+        // Create temporary table for bulk loading
+        let temp_table = format!("temp_klines_{}", std::process::id());
+        conn.execute_batch(&format!(
+            "CREATE TEMPORARY TABLE {} (
+                kline_id BIGINT,
+                ticker_id INTEGER,
+                timeframe VARCHAR,
+                candle_time BIGINT,
+                open_price DECIMAL(18,8),
+                high_price DECIMAL(18,8),
+                low_price DECIMAL(18,8),
+                close_price DECIMAL(18,8),
+                volume DECIMAL(18,8),
+                num_trades INTEGER
+            )",
+            temp_table
+        ))
+        .context("Failed to create temp table")?;
 
-        for row in batch {
-            stmt.execute(duckdb::params![row.0, row.1, row.2, row.3, row.4, row.5])
-                .context("Failed to insert trade")?;
+        // Use Appender for bulk loading into temp table
+        let mut appender = conn.appender(&temp_table)
+            .context("Failed to create appender")?;
+
+        let mut csv_reader = csv::ReaderBuilder::new()
+            .has_headers(false)
+            .from_reader(reader);
+
+        let mut kline_counter: u64 = 0;
+
+        for result in csv_reader.records() {
+            let record = result
+                .context("Failed to parse CSV record")?;
+
+            if record.len() < 12 {
+                continue; // Skip invalid records
+            }
+
+            // Binance klines CSV format:
+            // open_time, open, high, low, close, volume, close_time, quote_volume, trades, taker_buy_base, taker_buy_quote, ignore
+            let open_time: i64 = record[0].parse().unwrap_or(0);
+            let open: f64 = record[1].parse().unwrap_or(0.0);
+            let high: f64 = record[2].parse().unwrap_or(0.0);
+            let low: f64 = record[3].parse().unwrap_or(0.0);
+            let close: f64 = record[4].parse().unwrap_or(0.0);
+            let volume: f64 = record[5].parse().unwrap_or(0.0);
+            let _close_time: i64 = record[6].parse().unwrap_or(0);
+            let num_trades: i32 = record[8].parse().unwrap_or(0);
+
+            // Generate deterministic ID for idempotent inserts
+            let kline_id = super::helpers::generate_kline_id(ticker_id, timeframe, open_time as u64, kline_counter);
+            kline_counter += 1;
+
+            appender.append_row(duckdb::params![
+                kline_id,
+                ticker_id,
+                timeframe,
+                open_time,
+                open,
+                high,
+                low,
+                close,
+                volume,
+                num_trades
+            ])
+            .context("Failed to append kline row")?;
         }
 
-        Ok(())
+        // Flush appender to commit data to temp table
+        appender.flush()
+            .context("Failed to flush appender")?;
+
+        // Drop appender to release lock
+        drop(appender);
+
+        // Upsert from temp table to main table
+        let rows_affected = conn.execute(
+            &format!(
+                "INSERT INTO klines (kline_id, ticker_id, timeframe, candle_time, open_price, high_price, low_price, close_price, volume, num_trades)
+                 SELECT kline_id, ticker_id, timeframe, candle_time, open_price, high_price, low_price, close_price, volume, num_trades
+                 FROM {}
+                 ON CONFLICT (ticker_id, timeframe, candle_time) DO UPDATE SET
+                     open_price = EXCLUDED.open_price,
+                     high_price = EXCLUDED.high_price,
+                     low_price = EXCLUDED.low_price,
+                     close_price = EXCLUDED.close_price,
+                     volume = EXCLUDED.volume,
+                     num_trades = EXCLUDED.num_trades",
+                temp_table
+            ),
+            [],
+        )
+        .context("Failed to upsert from temp table")?;
+
+        // Drop temp table
+        conn.execute_batch(&format!("DROP TABLE {}", temp_table))
+            .context("Failed to drop temp table")?;
+
+        Ok(rows_affected)
     }
+
 
     /// Find all ZIP files recursively in directory
     fn find_zip_files(&self, root: &Path) -> Result<Vec<PathBuf>> {
@@ -351,14 +531,20 @@ mod tests {
 
     #[test]
     fn test_archive_importer_creation() {
-        let importer = ArchiveImporter::new(1000, false);
+        let importer = ArchiveImporter::new_for_trades(1000, false);
         assert_eq!(importer.batch_size, 1000);
         assert!(!importer.dry_run);
+        assert_eq!(importer.data_type, DataType::Trades);
+
+        let importer = ArchiveImporter::new_for_klines(1000, false);
+        assert_eq!(importer.batch_size, 1000);
+        assert!(!importer.dry_run);
+        assert_eq!(importer.data_type, DataType::Klines);
     }
 
     #[test]
     fn test_parse_archive_path() {
-        let importer = ArchiveImporter::new(1000, false);
+        let importer = ArchiveImporter::new_for_trades(1000, false);
 
         let path = PathBuf::from(
             "market_data/binance/data/futures/um/daily/aggTrades/BTCUSDT/BTCUSDT-aggTrades-2024-01-15.zip",
@@ -374,7 +560,7 @@ mod tests {
 
     #[test]
     fn test_parse_archive_path_spot() {
-        let importer = ArchiveImporter::new(1000, false);
+        let importer = ArchiveImporter::new_for_trades(1000, false);
 
         let path = PathBuf::from(
             "market_data/binance/data/spot/daily/aggTrades/BTCUSDT/BTCUSDT-aggTrades-2024-01-15.zip",

@@ -14,6 +14,26 @@ pub struct DbStats {
     pub schema_version: i32,
 }
 
+/// Per-ticker statistics
+#[derive(Debug, Clone)]
+pub struct TickerStats {
+    pub symbol: String,
+    pub exchange: String,
+    pub trade_count: i64,
+    pub trade_start_date: Option<String>,
+    pub trade_end_date: Option<String>,
+    pub kline_intervals: Vec<KlineIntervalStats>,
+}
+
+/// Kline statistics by interval
+#[derive(Debug, Clone)]
+pub struct KlineIntervalStats {
+    pub interval: String,
+    pub count: i64,
+    pub start_date: Option<String>,
+    pub end_date: Option<String>,
+}
+
 /// DatabaseManager for DuckDB operations
 pub struct DatabaseManager {
     conn: Connection,
@@ -163,6 +183,116 @@ impl DatabaseManager {
         self.conn.execute_batch("VACUUM; ANALYZE;")?;
         log::info!("VACUUM completed");
         Ok(())
+    }
+
+    /// Get statistics for all tickers
+    pub fn get_all_ticker_stats(&self) -> Result<Vec<TickerStats>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT DISTINCT t.symbol, e.name as exchange, t.ticker_id
+             FROM tickers t
+             JOIN exchanges e ON t.exchange_id = e.exchange_id
+             ORDER BY t.symbol"
+        )?;
+
+        let ticker_rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?, // symbol
+                row.get::<_, String>(1)?, // exchange
+                row.get::<_, i64>(2)?,    // ticker_id
+            ))
+        })?;
+
+        let mut stats = Vec::new();
+
+        for ticker_row in ticker_rows {
+            let (symbol, exchange, ticker_id) = ticker_row?;
+
+            // Get trade stats
+            let (trade_count, trade_start, trade_end) = self.conn.query_row(
+                "SELECT COUNT(*),
+                        MIN(timestamp),
+                        MAX(timestamp)
+                 FROM trades WHERE ticker_id = ?",
+                [ticker_id],
+                |row| {
+                    let count: i64 = row.get(0)?;
+                    let start: Option<i64> = row.get(1).ok();
+                    let end: Option<i64> = row.get(2).ok();
+                    Ok((count, start, end))
+                }
+            ).unwrap_or((0, None, None));
+
+            // Convert timestamps to dates
+            let trade_start_date = trade_start.and_then(|ts| {
+                chrono::DateTime::from_timestamp_millis(ts)
+                    .map(|dt| dt.format("%Y-%m-%d").to_string())
+            });
+
+            let trade_end_date = trade_end.and_then(|ts| {
+                chrono::DateTime::from_timestamp_millis(ts)
+                    .map(|dt| dt.format("%Y-%m-%d").to_string())
+            });
+
+            // Get kline stats by interval
+            // Try both column names for compatibility (flowsurface uses candle_time, data-loader uses open_time)
+            let kline_query = if self.conn.prepare("SELECT candle_time FROM klines LIMIT 1").is_ok() {
+                "SELECT timeframe, COUNT(*), MIN(candle_time), MAX(candle_time)
+                 FROM klines
+                 WHERE ticker_id = ?
+                 GROUP BY timeframe
+                 ORDER BY timeframe"
+            } else {
+                "SELECT timeframe, COUNT(*), MIN(open_time), MAX(open_time)
+                 FROM klines
+                 WHERE ticker_id = ?
+                 GROUP BY timeframe
+                 ORDER BY timeframe"
+            };
+
+            let mut kline_stmt = self.conn.prepare(kline_query)?;
+
+            let kline_intervals: Vec<KlineIntervalStats> = kline_stmt.query_map([ticker_id], |row| {
+                let interval: String = row.get(0)?;
+                let count: i64 = row.get(1)?;
+                let start: Option<i64> = row.get(2).ok();
+                let end: Option<i64> = row.get(3).ok();
+
+                let start_date = start.and_then(|ts| {
+                    chrono::DateTime::from_timestamp_millis(ts)
+                        .map(|dt| dt.format("%Y-%m-%d").to_string())
+                });
+
+                let end_date = end.and_then(|ts| {
+                    chrono::DateTime::from_timestamp_millis(ts)
+                        .map(|dt| dt.format("%Y-%m-%d").to_string())
+                });
+
+                Ok(KlineIntervalStats {
+                    interval,
+                    count,
+                    start_date,
+                    end_date,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+
+            stats.push(TickerStats {
+                symbol,
+                exchange,
+                trade_count,
+                trade_start_date,
+                trade_end_date,
+                kline_intervals,
+            });
+        }
+
+        Ok(stats)
+    }
+
+    /// Get statistics for a specific ticker
+    pub fn get_ticker_stats(&self, ticker_symbol: &str) -> Result<Option<TickerStats>> {
+        let all_stats = self.get_all_ticker_stats()?;
+        Ok(all_stats.into_iter().find(|s| s.symbol == ticker_symbol))
     }
 
     /// Get mutable reference to connection for import operations

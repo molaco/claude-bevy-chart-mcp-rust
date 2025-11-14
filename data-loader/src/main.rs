@@ -86,6 +86,18 @@ enum Commands {
         /// Show detailed per-ticker statistics
         #[arg(short, long)]
         detailed: bool,
+
+        /// Show stats for specific ticker (e.g., BTCUSDT)
+        #[arg(short, long)]
+        ticker: Option<String>,
+
+        /// Show only trades statistics
+        #[arg(long)]
+        trades: bool,
+
+        /// Show only klines statistics
+        #[arg(long)]
+        klines: bool,
     },
 
     /// Initialize database schema
@@ -228,8 +240,11 @@ async fn main() -> Result<()> {
                     println!("\n=== Importing Downloaded Files ===");
 
                     // Construct the download directory path
+                    // Binance structure: binance-data/data/spot/daily/klines/[TICKER]/[INTERVAL]/
                     let download_dir = base_path
+                        .join("data")
                         .join("spot")
+                        .join("daily")
                         .join("klines")
                         .join(&ticker)
                         .join(&interval);
@@ -237,13 +252,13 @@ async fn main() -> Result<()> {
                     log::info!("Importing from: {}", download_dir.display());
 
                     if download_dir.exists() {
-                        let importer = import::archive::ArchiveImporter::new(1000, false);
+                        let importer = import::archive::ArchiveImporter::new_for_klines(1000, false);
                         let conn = db.get_connection_mut();
                         let import_stats = importer.import_zip_archives(conn, &download_dir)?;
 
                         println!("\n=== Import Summary ===");
                         println!("Files processed: {}", import_stats.files_processed);
-                        println!("Trades imported: {}", import_stats.trades_migrated);
+                        println!("Klines imported: {}", import_stats.trades_migrated);
 
                         if !import_stats.errors.is_empty() {
                             println!("\nImport errors: {}", import_stats.errors.len());
@@ -336,15 +351,18 @@ async fn main() -> Result<()> {
                     println!("\n=== Importing Downloaded Files ===");
 
                     // Construct the download directory path
+                    // Binance structure: binance-data/data/spot/daily/aggTrades/[TICKER]/
                     let download_dir = base_path
+                        .join("data")
                         .join("spot")
-                        .join("trades")
+                        .join("daily")
+                        .join("aggTrades")
                         .join(&ticker);
 
                     log::info!("Importing from: {}", download_dir.display());
 
                     if download_dir.exists() {
-                        let importer = import::archive::ArchiveImporter::new(1000, false);
+                        let importer = import::archive::ArchiveImporter::new_for_trades(1000, false);
                         let conn = db.get_connection_mut();
                         let import_stats = importer.import_zip_archives(conn, &download_dir)?;
 
@@ -375,7 +393,9 @@ async fn main() -> Result<()> {
             log::info!("Importing archives from: {}", path.display());
             log::info!("Batch size: {}, Dry run: {}", batch_size, dry_run);
 
-            let importer = import::archive::ArchiveImporter::new(batch_size, dry_run);
+            // Default to trades for backward compatibility
+            // TODO: Add a flag to specify data type (trades vs klines)
+            let importer = import::archive::ArchiveImporter::new_for_trades(batch_size, dry_run);
             let conn = db.get_connection_mut();
             let stats = importer.import_zip_archives(conn, &path)?;
 
@@ -393,24 +413,96 @@ async fn main() -> Result<()> {
             Ok(())
         }
 
-        Commands::Stats { detailed } => {
+        Commands::Stats { detailed, ticker, trades, klines } => {
             log::info!("Fetching database statistics...");
-            let stats = db.get_stats()?;
 
-            println!("\n=== Database Statistics ===");
-            println!("Total trades:  {}", stats.total_trades);
-            println!("Total klines:  {}", stats.total_klines);
-            println!("Total tickers: {}", stats.total_tickers);
-            println!(
-                "Database size: {:.2} MB",
-                stats.database_size_bytes as f64 / 1_048_576.0
-            );
-            println!("Schema version: {}", stats.schema_version);
+            // If specific ticker requested
+            if let Some(ticker_symbol) = ticker {
+                match db.get_ticker_stats(&ticker_symbol)? {
+                    Some(ticker_stats) => {
+                        println!("\n=== Ticker: {} ({}) ===", ticker_stats.symbol, ticker_stats.exchange);
 
-            if detailed {
-                log::info!("Detailed statistics requested");
-                // TODO: Show per-ticker breakdown
-                log::warn!("Detailed statistics not yet implemented");
+                        // Show trades if not filtered to klines-only
+                        if !klines {
+                            if ticker_stats.trade_count > 0 {
+                                print!("\nTrades: {}", ticker_stats.trade_count);
+                                if let (Some(start), Some(end)) = (&ticker_stats.trade_start_date, &ticker_stats.trade_end_date) {
+                                    print!(" ({} to {})", start, end);
+                                }
+                                println!();
+                            } else {
+                                println!("\nNo trades data");
+                            }
+                        }
+
+                        // Show klines if not filtered to trades-only
+                        if !trades {
+                            if !ticker_stats.kline_intervals.is_empty() {
+                                println!("\nKlines:");
+                                for interval in &ticker_stats.kline_intervals {
+                                    print!("  {}: {} candles", interval.interval, interval.count);
+                                    if let (Some(start), Some(end)) = (&interval.start_date, &interval.end_date) {
+                                        print!(" ({} to {})", start, end);
+                                    }
+                                    println!();
+                                }
+                            } else {
+                                println!("\nNo klines data");
+                            }
+                        }
+                    }
+                    None => {
+                        println!("Ticker '{}' not found in database", ticker_symbol);
+                    }
+                }
+            } else {
+                // Show overall database stats
+                let stats = db.get_stats()?;
+
+                println!("\n=== Database Statistics ===");
+                println!("Total trades:  {}", stats.total_trades);
+                println!("Total klines:  {}", stats.total_klines);
+                println!("Total tickers: {}", stats.total_tickers);
+                println!(
+                    "Database size: {:.2} MB",
+                    stats.database_size_bytes as f64 / 1_048_576.0
+                );
+                println!("Schema version: {}", stats.schema_version);
+
+                // Show per-ticker summary if detailed
+                if detailed {
+                    log::info!("Fetching detailed per-ticker statistics...");
+                    let ticker_stats = db.get_all_ticker_stats()?;
+
+                    if !ticker_stats.is_empty() {
+                        println!("\n=== Per-Ticker Summary ===");
+
+                        for ticker in &ticker_stats {
+                            println!("\n{} ({}):", ticker.symbol, ticker.exchange);
+
+                            // Show trades if not filtered to klines-only
+                            if !klines && ticker.trade_count > 0 {
+                                print!("  Trades: {}", ticker.trade_count);
+                                if let (Some(start), Some(end)) = (&ticker.trade_start_date, &ticker.trade_end_date) {
+                                    print!(" ({} to {})", start, end);
+                                }
+                                println!();
+                            }
+
+                            // Show klines if not filtered to trades-only
+                            if !trades && !ticker.kline_intervals.is_empty() {
+                                println!("  Klines:");
+                                for interval in &ticker.kline_intervals {
+                                    print!("    {}: {} candles", interval.interval, interval.count);
+                                    if let (Some(start), Some(end)) = (&interval.start_date, &interval.end_date) {
+                                        print!(" ({} to {})", start, end);
+                                    }
+                                    println!();
+                                }
+                            }
+                        }
+                    }
+                }
             }
 
             Ok(())

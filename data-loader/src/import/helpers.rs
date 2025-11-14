@@ -14,6 +14,20 @@ pub fn generate_trade_id(ticker_id: i64, trade_time: u64, counter: u64) -> i64 {
     ((ticker_id as i64) << 48) | ((trade_time >> 20) as i64) << 16 | ((counter & 0xFFFF) as i64)
 }
 
+/// Generate a unique kline ID for insertion
+///
+/// Uses ticker_id, timeframe, and open_time to create deterministic IDs
+pub fn generate_kline_id(ticker_id: i64, timeframe: &str, open_time: u64, counter: u64) -> i64 {
+    // Create a simple hash from timeframe string
+    let timeframe_hash = timeframe
+        .bytes()
+        .fold(0i64, |acc, b| acc.wrapping_mul(31).wrapping_add(b as i64))
+        .abs() & 0xFF;
+
+    // Combine ticker_id, timeframe_hash, open_time, and counter to create unique ID
+    ((ticker_id as i64) << 48) | (timeframe_hash << 40) | ((open_time >> 24) as i64) << 16 | ((counter & 0xFFFF) as i64)
+}
+
 /// Get exchange_id from exchange name, creating if needed
 pub fn get_or_create_exchange_id(conn: &mut Connection, exchange_name: &str) -> Result<i64> {
     // Try to get existing exchange_id
@@ -71,11 +85,21 @@ pub fn get_or_create_ticker_id(
         return Ok(id);
     }
 
+    // Generate ticker_id (flowsurface doesn't use auto-increment)
+    let next_id: i64 = conn
+        .query_row(
+            "SELECT COALESCE(MAX(ticker_id), 0) + 1 FROM tickers",
+            [],
+            |row| row.get(0),
+        )?;
+
     // Create new ticker record
+    // Use flowsurface-binance column names: min_ticksize, min_qty (matching the actual database schema)
     conn.execute(
-        "INSERT INTO tickers (exchange_id, symbol, tick_size, min_quantity, contract_size)
-         VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO tickers (ticker_id, exchange_id, symbol, min_ticksize, min_qty, contract_size)
+         VALUES (?, ?, ?, ?, ?, ?)",
         duckdb::params![
+            next_id,
             exchange_id,
             symbol,
             tick_size,
@@ -84,15 +108,7 @@ pub fn get_or_create_ticker_id(
         ],
     )?;
 
-    // Get the auto-generated ID
-    let id: i64 = conn
-        .query_row(
-            "SELECT ticker_id FROM tickers WHERE exchange_id = ? AND symbol = ?",
-            duckdb::params![exchange_id, symbol],
-            |row| row.get(0),
-        )?;
-
-    Ok(id)
+    Ok(next_id)
 }
 
 /// Look up existing ticker_id without creating new record
