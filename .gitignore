@@ -2,3 +2,4 @@
 .TRASH/
 binance-data/
 data-loader/binance-data/
+screenshot-*.png
