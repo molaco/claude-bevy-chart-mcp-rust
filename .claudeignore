@@ -1,0 +1,9 @@
+# Downloaded market data
+binance-data/
+data-loader/binance-data/
+
+# Build artifacts
+/target
+
+# Screenshots
+screenshot-*.png
