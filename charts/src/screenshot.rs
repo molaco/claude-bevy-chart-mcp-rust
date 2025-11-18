@@ -5,7 +5,11 @@ use image::ImageReader;
 /// Take a screenshot of the primary window and save it to the specified path.
 /// If no path is provided, generates an auto-incrementing filename.
 /// Returns the path where the screenshot was saved.
-pub fn take_screenshot(commands: &mut Commands, path: Option<String>, next_index: &mut u32) -> String {
+pub fn take_screenshot(
+    commands: &mut Commands,
+    path: Option<String>,
+    next_index: &mut u32,
+) -> String {
     let filename = path.unwrap_or_else(|| {
         let name = format!("screenshot-{:04}.png", *next_index);
         *next_index += 1;
@@ -23,7 +27,10 @@ pub fn take_screenshot(commands: &mut Commands, path: Option<String>, next_index
 
 /// Crop a screenshot from source path to destination path, keeping only the chart area (left 70%).
 /// Returns an error if the file cannot be read or written.
-pub fn crop_screenshot_to_chart(source_path: &str, dest_path: &str) -> Result<(), Box<dyn std::error::Error>> {
+pub fn crop_screenshot_to_chart(
+    source_path: &str,
+    dest_path: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
     // Load the saved screenshot
     let img = ImageReader::open(source_path)?.decode()?;
 
@@ -38,6 +45,9 @@ pub fn crop_screenshot_to_chart(source_path: &str, dest_path: &str) -> Result<()
     // Save to destination path
     cropped.save(dest_path)?;
 
-    println!("Cropped screenshot to chart area: {}x{} -> {}x{} (saved to {})", width, height, crop_width, height, dest_path);
+    println!(
+        "Cropped screenshot to chart area: {}x{} -> {}x{} (saved to {})",
+        width, height, crop_width, height, dest_path
+    );
     Ok(())
 }

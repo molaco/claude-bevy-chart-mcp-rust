@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 /// Raw candle from database
 #[derive(Debug, Clone)]
 pub struct Candle {
-    pub time: i64,           // Unix timestamp in ms
+    pub time: i64, // Unix timestamp in ms
     pub open: f64,
     pub high: f64,
     pub low: f64,
@@ -21,16 +21,16 @@ pub struct Candle {
 #[derive(Debug, Clone)]
 pub struct ChartSpace {
     // Y-axis: Price/Value axis (logical, pane-specific)
-    pub visible_price_min: f32,        // Auto-calculated from visible candles
-    pub visible_price_max: f32,        // Auto-calculated from visible candles
-    pub price_padding: f32,            // Extra space above/below (5-10%)
+    pub visible_price_min: f32, // Auto-calculated from visible candles
+    pub visible_price_max: f32, // Auto-calculated from visible candles
+    pub price_padding: f32,     // Extra space above/below (5-10%)
 
     // Physical viewport (Bevy world space, pane-specific)
-    pub viewport: Rect,                // Where this pane is drawn on screen
+    pub viewport: Rect, // Where this pane is drawn on screen
 
     // Cached calculations (updated when bounds change)
-    pub candle_width_px: f32,          // Width of each candle in pixels
-    pub price_scale: f32,              // Pixels per $1 price movement
+    pub candle_width_px: f32, // Width of each candle in pixels
+    pub price_scale: f32,     // Pixels per $1 price movement
 }
 
 impl ChartSpace {
@@ -48,7 +48,13 @@ impl ChartSpace {
     }
 
     /// Map candle index and price to world coordinates
-    pub fn to_world(&self, candle_index: usize, price: f32, visible_candle_start: usize, visible_candle_count: usize) -> Vec2 {
+    pub fn to_world(
+        &self,
+        candle_index: usize,
+        price: f32,
+        visible_candle_start: usize,
+        visible_candle_count: usize,
+    ) -> Vec2 {
         // Map candle index relative to visible range
         let candle_offset = candle_index.saturating_sub(visible_candle_start);
         let x_percent = candle_offset as f32 / visible_candle_count as f32;
@@ -67,20 +73,30 @@ impl ChartSpace {
     }
 
     /// Map world coordinates to candle index and price
-    pub fn from_world(&self, world_pos: Vec2, visible_candle_start: usize, visible_candle_count: usize) -> (usize, f32) {
+    pub fn from_world(
+        &self,
+        world_pos: Vec2,
+        visible_candle_start: usize,
+        visible_candle_count: usize,
+    ) -> (usize, f32) {
         let x_percent = (world_pos.x - self.viewport.min.x) / self.viewport.width();
-        let candle_index = visible_candle_start +
-            (x_percent * visible_candle_count as f32) as usize;
+        let candle_index =
+            visible_candle_start + (x_percent * visible_candle_count as f32) as usize;
 
         let y_percent = (world_pos.y - self.viewport.min.y) / self.viewport.height();
-        let price = self.visible_price_min +
-            y_percent * (self.visible_price_max - self.visible_price_min);
+        let price =
+            self.visible_price_min + y_percent * (self.visible_price_max - self.visible_price_min);
 
         (candle_index, price)
     }
 
     /// Fit price bounds to visible candles
-    pub fn fit_price_bounds(&mut self, candles: &[Candle], visible_candle_start: usize, visible_candle_count: usize) {
+    pub fn fit_price_bounds(
+        &mut self,
+        candles: &[Candle],
+        visible_candle_start: usize,
+        visible_candle_count: usize,
+    ) {
         if candles.is_empty() {
             return;
         }
@@ -117,7 +133,7 @@ impl ChartSpace {
         candles: &[Candle],
         indicators: &[MovingAverage],
         visible_candle_start: usize,
-        visible_candle_count: usize
+        visible_candle_count: usize,
     ) {
         if candles.is_empty() {
             return;
@@ -165,7 +181,12 @@ impl ChartSpace {
     }
 
     /// Fit volume bounds to visible candles
-    pub fn fit_volume_bounds(&mut self, candles: &[Candle], visible_candle_start: usize, visible_candle_count: usize) {
+    pub fn fit_volume_bounds(
+        &mut self,
+        candles: &[Candle],
+        visible_candle_start: usize,
+        visible_candle_count: usize,
+    ) {
         if candles.is_empty() {
             return;
         }
@@ -178,7 +199,8 @@ impl ChartSpace {
         }
 
         let visible_candles = &candles[start..end];
-        let max_volume = visible_candles.iter()
+        let max_volume = visible_candles
+            .iter()
             .map(|c| c.volume)
             .max_by(|a, b| a.partial_cmp(b).unwrap())
             .unwrap_or(1.0);
@@ -234,7 +256,13 @@ pub struct Pane {
 }
 
 impl Pane {
-    pub fn new(id: PaneId, pane_type: PaneType, height_percent: f32, viewport: Rect, visible_candle_count: usize) -> Self {
+    pub fn new(
+        id: PaneId,
+        pane_type: PaneType,
+        height_percent: f32,
+        viewport: Rect,
+        visible_candle_count: usize,
+    ) -> Self {
         Self {
             id,
             pane_type,
@@ -288,11 +316,11 @@ pub fn calculate_pane_layouts(panes: &mut [Pane], total_area: Rect, visible_cand
 /// Moving Average indicator
 #[derive(Debug, Clone)]
 pub struct MovingAverage {
-    pub period: usize,              // 20, 50, 200
-    pub values: Vec<Option<f32>>,   // Cached MA per candle
-    pub name: String,               // "SMA-20"
-    pub color: Color,               // Line color
-    pub visible: bool,              // Toggle visibility
+    pub period: usize,            // 20, 50, 200
+    pub values: Vec<Option<f32>>, // Cached MA per candle
+    pub name: String,             // "SMA-20"
+    pub color: Color,             // Line color
+    pub visible: bool,            // Toggle visibility
 }
 
 impl MovingAverage {
@@ -305,10 +333,7 @@ impl MovingAverage {
         }
 
         // Calculate initial sum for first window [0..period-1]
-        let mut sum: f64 = candles[0..period]
-            .iter()
-            .map(|c| c.close)
-            .sum();
+        let mut sum: f64 = candles[0..period].iter().map(|c| c.close).sum();
 
         // Store first SMA value
         values[period - 1] = Some((sum / period as f64) as f32);
@@ -316,8 +341,8 @@ impl MovingAverage {
         // Sliding window: for each subsequent candle
         // Remove oldest value, add newest value
         for i in period..candles.len() {
-            sum -= candles[i - period].close;  // Remove value leaving window
-            sum += candles[i].close;           // Add value entering window
+            sum -= candles[i - period].close; // Remove value leaving window
+            sum += candles[i].close; // Add value entering window
             values[i] = Some((sum / period as f64) as f32);
         }
 
@@ -474,10 +499,7 @@ impl MovingAverage {
         }
 
         // First value is SMA
-        let sma: f64 = candles[0..period]
-            .iter()
-            .map(|c| c.close)
-            .sum::<f64>() / period as f64;
+        let sma: f64 = candles[0..period].iter().map(|c| c.close).sum::<f64>() / period as f64;
         values[period - 1] = Some(sma as f32);
 
         // Subsequent values use exponential smoothing
@@ -518,11 +540,11 @@ impl MovingAverage {
 #[derive(Resource)]
 pub struct Chart {
     pub ticker_id: i32,
-    pub timeframe: String,             // "15m", "1h"
+    pub timeframe: String, // "15m", "1h"
 
     // Data
-    pub candles: Vec<Candle>,          // Loaded candles (grows as you scroll)
-    pub candle_offset: usize,          // Global offset (for lazy loading)
+    pub candles: Vec<Candle>, // Loaded candles (grows as you scroll)
+    pub candle_offset: usize, // Global offset (for lazy loading)
 
     // SHARED X-axis state (synchronized across all panes)
     pub visible_candle_start: usize,
@@ -530,7 +552,7 @@ pub struct Chart {
 
     // Multi-pane support
     pub panes: Vec<Pane>,
-    pub total_area: Rect,              // Total chart viewport for resize calculations
+    pub total_area: Rect, // Total chart viewport for resize calculations
 
     // Coordinate system (DEPRECATED - use panes instead)
     pub space: ChartSpace,
@@ -540,7 +562,7 @@ pub struct Chart {
 
     // State
     pub needs_redraw: bool,
-    pub loading: bool,                 // True when fetching more data
+    pub loading: bool, // True when fetching more data
 }
 
 /// Calculate number of "virtual candles" worth of space to add on the right edge
@@ -566,15 +588,12 @@ pub fn update_pane_bounds(chart: &mut Chart) {
                     candles,
                     indicators,
                     visible_start,
-                    visible_count
+                    visible_count,
                 );
             }
             PaneType::Volume => {
-                pane.space.fit_volume_bounds(
-                    candles,
-                    visible_start,
-                    visible_count
-                );
+                pane.space
+                    .fit_volume_bounds(candles, visible_start, visible_count);
             }
             PaneType::Indicator { .. } => {
                 // TODO: Handle indicators when implemented
@@ -615,9 +634,8 @@ impl ChartDatabase {
 
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(query)?;
-        let candles = stmt.query_map(
-            params![ticker_id, timeframe, start_time, end_time],
-            |row| {
+        let candles = stmt
+            .query_map(params![ticker_id, timeframe, start_time, end_time], |row| {
                 Ok(Candle {
                     time: row.get(0)?,
                     open: row.get(1)?,
@@ -626,37 +644,39 @@ impl ChartDatabase {
                     close: row.get(4)?,
                     volume: row.get(5)?,
                 })
-            }
-        )?.collect::<Result<Vec<_>, _>>()?;
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
 
         Ok(candles)
     }
 
     /// Get total candle count for ticker/timeframe
-    pub fn get_candle_count(&self, ticker_id: i32, timeframe: &str)
-        -> Result<usize, duckdb::Error> {
+    pub fn get_candle_count(
+        &self,
+        ticker_id: i32,
+        timeframe: &str,
+    ) -> Result<usize, duckdb::Error> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
-            "SELECT COUNT(*) FROM klines WHERE ticker_id = ? AND timeframe = ?"
-        )?;
-        let count: i64 = stmt.query_row(
-            params![ticker_id, timeframe],
-            |row| row.get(0)
-        )?;
+        let mut stmt =
+            conn.prepare("SELECT COUNT(*) FROM klines WHERE ticker_id = ? AND timeframe = ?")?;
+        let count: i64 = stmt.query_row(params![ticker_id, timeframe], |row| row.get(0))?;
         Ok(count as usize)
     }
 
     /// Get time range for ticker/timeframe
-    pub fn get_time_range(&self, ticker_id: i32, timeframe: &str)
-        -> Result<(i64, i64), duckdb::Error> {
+    pub fn get_time_range(
+        &self,
+        ticker_id: i32,
+        timeframe: &str,
+    ) -> Result<(i64, i64), duckdb::Error> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT MIN(candle_time), MAX(candle_time) FROM klines WHERE ticker_id = ? AND timeframe = ?"
         )?;
-        let (min_time, max_time): (i64, i64) = stmt.query_row(
-            params![ticker_id, timeframe],
-            |row| Ok((row.get(0)?, row.get(1)?))
-        )?;
+        let (min_time, max_time): (i64, i64) = stmt
+            .query_row(params![ticker_id, timeframe], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })?;
         Ok((min_time, max_time))
     }
 
@@ -664,35 +684,31 @@ impl ChartDatabase {
     pub fn get_available_timeframes(&self, ticker_id: i32) -> Result<Vec<String>, duckdb::Error> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT DISTINCT timeframe FROM klines WHERE ticker_id = ? ORDER BY timeframe"
+            "SELECT DISTINCT timeframe FROM klines WHERE ticker_id = ? ORDER BY timeframe",
         )?;
-        let timeframes = stmt.query_map(
-            params![ticker_id],
-            |row| row.get(0)
-        )?
-        .collect::<Result<Vec<String>, _>>()?;
+        let timeframes = stmt
+            .query_map(params![ticker_id], |row| row.get(0))?
+            .collect::<Result<Vec<String>, _>>()?;
 
         // Sort by timeframe duration order (not alphabetically)
         let mut sorted = timeframes;
-        sorted.sort_by_key(|tf| {
-            match tf.as_str() {
-                "1m" => 1,
-                "3m" => 2,
-                "5m" => 3,
-                "15m" => 4,
-                "30m" => 5,
-                "1h" => 6,
-                "2h" => 7,
-                "4h" => 8,
-                "6h" => 9,
-                "8h" => 10,
-                "12h" => 11,
-                "1d" => 12,
-                "3d" => 13,
-                "1w" => 14,
-                "1M" => 15,
-                _ => 99,
-            }
+        sorted.sort_by_key(|tf| match tf.as_str() {
+            "1m" => 1,
+            "3m" => 2,
+            "5m" => 3,
+            "15m" => 4,
+            "30m" => 5,
+            "1h" => 6,
+            "2h" => 7,
+            "4h" => 8,
+            "6h" => 9,
+            "8h" => 10,
+            "12h" => 11,
+            "1d" => 12,
+            "3d" => 13,
+            "1w" => 14,
+            "1M" => 15,
+            _ => 99,
         });
 
         Ok(sorted)
@@ -701,13 +717,8 @@ impl ChartDatabase {
     /// Resolve ticker symbol to ticker_id
     pub fn resolve_ticker(&self, symbol: &str) -> Result<i32, duckdb::Error> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
-            "SELECT ticker_id FROM tickers WHERE symbol = ? LIMIT 1"
-        )?;
-        let ticker_id: i32 = stmt.query_row(
-            params![symbol],
-            |row| row.get(0)
-        )?;
+        let mut stmt = conn.prepare("SELECT ticker_id FROM tickers WHERE symbol = ? LIMIT 1")?;
+        let ticker_id: i32 = stmt.query_row(params![symbol], |row| row.get(0))?;
         Ok(ticker_id)
     }
 
@@ -723,10 +734,10 @@ impl ChartDatabase {
         let mut stmt = conn.prepare(
             "SELECT COUNT(*) FROM klines WHERE ticker_id = ? AND timeframe = ? AND candle_time BETWEEN ? AND ?"
         )?;
-        let count: i64 = stmt.query_row(
-            params![ticker_id, timeframe, start_time, end_time],
-            |row| row.get(0)
-        )?;
+        let count: i64 = stmt
+            .query_row(params![ticker_id, timeframe, start_time, end_time], |row| {
+                row.get(0)
+            })?;
         Ok(count as usize)
     }
 }
@@ -739,9 +750,9 @@ pub struct InteractionState {
     pub drag_start_pos: Vec2,
 
     // Pane resize state
-    pub hover_resize_gap: Option<usize>,    // Which gap is being hovered
-    pub resizing_gap: Option<usize>,        // Which gap is being dragged
-    pub resize_start_heights: Vec<f32>,     // Original height_percent values
+    pub hover_resize_gap: Option<usize>, // Which gap is being hovered
+    pub resizing_gap: Option<usize>,     // Which gap is being dragged
+    pub resize_start_heights: Vec<f32>,  // Original height_percent values
 
     // Crosshair optimization: track last candle to debounce text updates
     pub last_crosshair_candle_index: Option<usize>,
@@ -759,7 +770,7 @@ pub struct VolumeToggleState {
 
 impl Default for VolumeToggleState {
     fn default() -> Self {
-        Self { visible: true }  // Volume pane visible by default
+        Self { visible: true } // Volume pane visible by default
     }
 }
 
@@ -768,8 +779,8 @@ impl Default for VolumeToggleState {
 pub struct ChartGrid {
     pub show_grid: bool,
     pub grid_color: Color,
-    pub y_tick_count: usize,      // Number of horizontal grid lines
-    pub x_tick_count: usize,      // Number of vertical grid lines
+    pub y_tick_count: usize, // Number of horizontal grid lines
+    pub x_tick_count: usize, // Number of vertical grid lines
 }
 
 impl Default for ChartGrid {
@@ -828,9 +839,9 @@ impl Default for Crosshair {
 /// Persistent crosshair entities (created once, updated every frame)
 #[derive(Resource)]
 pub struct CrosshairEntities {
-    pub vertical_line_segments: Vec<Entity>,      // Multiple dashed segments
-    pub horizontal_lines: Vec<(PaneId, Vec<Entity>)>,  // Dashed segments per pane
-    pub price_labels: Vec<(PaneId, Entity)>,      // One label per pane
+    pub vertical_line_segments: Vec<Entity>, // Multiple dashed segments
+    pub horizontal_lines: Vec<(PaneId, Vec<Entity>)>, // Dashed segments per pane
+    pub price_labels: Vec<(PaneId, Entity)>, // One label per pane
     pub time_label: Entity,
     pub ohlcv_box: Entity,
 }
@@ -962,35 +973,53 @@ pub enum PooledEntityType {
 
 /// Entity pool for a specific entity type
 pub struct EntityPool {
-    pub entities: Vec<Entity>,
-    pub available: Vec<usize>, // Indices of available entities
+    pub entity_type: PooledEntityType,
+    pub all_entities: std::collections::HashSet<Entity>,
+    pub available: std::collections::HashSet<Entity>,
 }
 
 impl EntityPool {
-    pub fn new() -> Self {
+    pub fn new(entity_type: PooledEntityType) -> Self {
         Self {
-            entities: Vec::new(),
-            available: Vec::new(),
+            entity_type,
+            all_entities: std::collections::HashSet::new(),
+            available: std::collections::HashSet::new(),
         }
     }
 
-    /// Get an available entity or None if pool exhausted
+    /// Get an available entity from the pool (O(1))
     pub fn get(&mut self) -> Option<Entity> {
-        self.available.pop().map(|idx| self.entities[idx])
+        self.available.iter().next().copied().map(|entity| {
+            self.available.remove(&entity);
+            entity
+        })
     }
 
-    /// Return an entity to the pool
-    pub fn return_entity(&mut self, entity: Entity) {
-        if let Some(idx) = self.entities.iter().position(|&e| e == entity) {
-            if !self.available.contains(&idx) {
-                self.available.push(idx);
-            }
+    /// Return an entity to the pool with type validation (O(1))
+    pub fn return_entity(&mut self, entity: Entity, pooled_type: PooledEntityType) {
+        // Validate entity type
+        if pooled_type != self.entity_type {
+            eprintln!(
+                "WARNING: Attempted to return {:?} entity to {:?} pool",
+                pooled_type, self.entity_type
+            );
+            return;
         }
+
+        if self.all_entities.contains(&entity) {
+            self.available.insert(entity);
+        }
+    }
+
+    /// Add a new entity to the pool
+    pub fn add_entity(&mut self, entity: Entity) {
+        self.all_entities.insert(entity);
+        self.available.insert(entity);
     }
 
     /// Get pool utilization stats
     pub fn stats(&self) -> (usize, usize) {
-        (self.entities.len(), self.available.len())
+        (self.all_entities.len(), self.available.len())
     }
 }
 
@@ -1007,11 +1036,11 @@ pub struct EntityPools {
 impl EntityPools {
     pub fn new() -> Self {
         Self {
-            wicks: EntityPool::new(),
-            bodies: EntityPool::new(),
-            ohlc_lines: EntityPool::new(),
-            range_lines: EntityPool::new(),
-            volume_bars: EntityPool::new(),
+            wicks: EntityPool::new(PooledEntityType::CandlestickWick),
+            bodies: EntityPool::new(PooledEntityType::CandlestickBody),
+            ohlc_lines: EntityPool::new(PooledEntityType::CandlestickOHLC),
+            range_lines: EntityPool::new(PooledEntityType::CandlestickRange),
+            volume_bars: EntityPool::new(PooledEntityType::VolumeBar),
         }
     }
 }
@@ -1020,6 +1049,7 @@ impl EntityPools {
 #[derive(Resource, Clone)]
 pub struct EntityPoolConfig {
     pub initial_pool_size: usize,
+    pub max_pool_size: usize,
     pub enabled: bool,
 }
 
@@ -1027,6 +1057,7 @@ impl Default for EntityPoolConfig {
     fn default() -> Self {
         Self {
             initial_pool_size: 1000,
+            max_pool_size: 2000, // Allow growth but cap it
             enabled: true,
         }
     }
@@ -1056,11 +1087,8 @@ impl TimeframeManager {
     /// Get all valid Binance timeframes in order
     pub fn all_timeframes() -> Vec<&'static str> {
         vec![
-            "1m", "3m", "5m", "15m", "30m",
-            "1h", "2h", "4h", "6h", "8h", "12h",
-            "1d", "3d",
-            "1w",
-            "1M"
+            "1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d", "3d", "1w",
+            "1M",
         ]
     }
 
@@ -1071,7 +1099,8 @@ impl TimeframeManager {
         }
 
         // Find current position in available timeframes
-        self.available_timeframes.iter()
+        self.available_timeframes
+            .iter()
             .position(|tf| tf == &self.current_timeframe)
             .and_then(|idx| self.available_timeframes.get(idx + 1))
             .cloned()
@@ -1084,9 +1113,16 @@ impl TimeframeManager {
         }
 
         // Find current position in available timeframes
-        self.available_timeframes.iter()
+        self.available_timeframes
+            .iter()
             .position(|tf| tf == &self.current_timeframe)
-            .and_then(|idx| if idx > 0 { self.available_timeframes.get(idx - 1) } else { None })
+            .and_then(|idx| {
+                if idx > 0 {
+                    self.available_timeframes.get(idx - 1)
+                } else {
+                    None
+                }
+            })
             .cloned()
     }
 }
@@ -1136,11 +1172,17 @@ mod tests {
                     assert!(
                         diff < 0.001,
                         "Mismatch at index {}: new={}, old={}, diff={}",
-                        i, a, b, diff
+                        i,
+                        a,
+                        b,
+                        diff
                     );
                 }
                 (None, None) => {}
-                _ => panic!("Option mismatch at index {}: new={:?}, old={:?}", i, sma_new[i], sma_old[i]),
+                _ => panic!(
+                    "Option mismatch at index {}: new={:?}, old={:?}",
+                    i, sma_new[i], sma_old[i]
+                ),
             }
         }
     }
@@ -1159,7 +1201,10 @@ mod tests {
                         assert!(
                             (a - b).abs() < 0.001,
                             "Period {} mismatch at index {}: {} vs {}",
-                            period, i, a, b
+                            period,
+                            i,
+                            a,
+                            b
                         );
                     }
                     (None, None) => {}
@@ -1237,7 +1282,10 @@ mod tests {
                 assert!(
                     relative_error < 0.00001,
                     "Numerical instability at {}: {} vs {}, error: {}",
-                    i, a, b, relative_error
+                    i,
+                    a,
+                    b,
+                    relative_error
                 );
             }
         }
@@ -1287,7 +1335,9 @@ mod tests {
                     assert!(
                         (a - b).abs() < 0.001,
                         "New value mismatch at index {}: {} vs {}",
-                        i, a, b
+                        i,
+                        a,
+                        b
                     );
                 }
                 (None, None) => {}
@@ -1312,7 +1362,8 @@ mod tests {
             .collect::<Vec<_>>();
 
         // Calculate SMA for old data
-        let mut ma_incremental = MovingAverage::new_sma(&candles_old, 20, Color::srgb(1.0, 1.0, 1.0));
+        let mut ma_incremental =
+            MovingAverage::new_sma(&candles_old, 20, Color::srgb(1.0, 1.0, 1.0));
 
         // Create full dataset (new + old)
         let mut candles_full = create_test_candles(100);
@@ -1333,7 +1384,9 @@ mod tests {
                     assert!(
                         (a - b).abs() < 0.001,
                         "Mismatch at index {}: {} vs {}",
-                        i, a, b
+                        i,
+                        a,
+                        b
                     );
                 }
                 (None, None) => {}
@@ -1402,7 +1455,10 @@ mod tests {
                         assert!(
                             (a - b).abs() < 0.001,
                             "Period {} mismatch at {}: {} vs {}",
-                            period, i, a, b
+                            period,
+                            i,
+                            a,
+                            b
                         );
                     }
                     (None, None) => {}

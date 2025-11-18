@@ -1,8 +1,8 @@
+use crate::types::*;
 use bevy::prelude::*;
 use bevy::sprite::Anchor;
 use bevy::window::CursorOptions;
 use chrono::{DateTime, Utc};
-use crate::types::*;
 
 // ============================================================================
 // HELPER FUNCTIONS
@@ -31,20 +31,60 @@ pub fn render_candlesticks(
     config: Res<CandlestickLODConfig>,
     mut pools: ResMut<EntityPools>,
     mut query_wicks: Query<
-        (Entity, &mut CandlestickWick, &mut Transform, &mut Sprite, &mut Visibility),
-        (Without<CandlestickBody>, Without<CandlestickOHLCLine>, Without<CandlestickRangeLine>)
+        (
+            Entity,
+            &mut CandlestickWick,
+            &mut Transform,
+            &mut Sprite,
+            &mut Visibility,
+        ),
+        (
+            Without<CandlestickBody>,
+            Without<CandlestickOHLCLine>,
+            Without<CandlestickRangeLine>,
+        ),
     >,
     mut query_bodies: Query<
-        (Entity, &mut CandlestickBody, &mut Transform, &mut Sprite, &mut Visibility),
-        (Without<CandlestickWick>, Without<CandlestickOHLCLine>, Without<CandlestickRangeLine>)
+        (
+            Entity,
+            &mut CandlestickBody,
+            &mut Transform,
+            &mut Sprite,
+            &mut Visibility,
+        ),
+        (
+            Without<CandlestickWick>,
+            Without<CandlestickOHLCLine>,
+            Without<CandlestickRangeLine>,
+        ),
     >,
     mut query_ohlc: Query<
-        (Entity, &mut CandlestickOHLCLine, &mut Transform, &mut Sprite, &mut Visibility),
-        (Without<CandlestickWick>, Without<CandlestickBody>, Without<CandlestickRangeLine>)
+        (
+            Entity,
+            &mut CandlestickOHLCLine,
+            &mut Transform,
+            &mut Sprite,
+            &mut Visibility,
+        ),
+        (
+            Without<CandlestickWick>,
+            Without<CandlestickBody>,
+            Without<CandlestickRangeLine>,
+        ),
     >,
     mut query_range: Query<
-        (Entity, &mut CandlestickRangeLine, &mut Transform, &mut Sprite, &mut Visibility),
-        (Without<CandlestickWick>, Without<CandlestickBody>, Without<CandlestickOHLCLine>)
+        (
+            Entity,
+            &mut CandlestickRangeLine,
+            &mut Transform,
+            &mut Sprite,
+            &mut Visibility,
+        ),
+        (
+            Without<CandlestickWick>,
+            Without<CandlestickBody>,
+            Without<CandlestickOHLCLine>,
+        ),
     >,
     mut pooled_query: Query<&mut PooledEntity>,
 ) {
@@ -53,8 +93,7 @@ pub fn render_candlesticks(
     }
 
     // Find the Price pane
-    let price_pane = chart.panes.iter()
-        .find(|p| matches!(p.id, PaneId::Price));
+    let price_pane = chart.panes.iter().find(|p| matches!(p.id, PaneId::Price));
 
     if price_pane.is_none() {
         return;
@@ -112,38 +151,46 @@ pub fn render_candlesticks(
                 if let Some(&entity) = existing_ohlc.get(&i) {
                     if let Ok((_, _, _, _, mut visibility)) = query_ohlc.get_mut(entity) {
                         *visibility = Visibility::Hidden;
-                    }
-                    pools.ohlc_lines.return_entity(entity);
-                    if let Ok(mut pooled) = pooled_query.get_mut(entity) {
-                        pooled.in_use = false;
+                        pools.ohlc_lines.return_entity(entity, PooledEntityType::CandlestickOHLC);
+                        if let Ok(mut pooled) = pooled_query.get_mut(entity) {
+                            pooled.in_use = false;
+                        }
                     }
                 }
                 if let Some(&entity) = existing_range.get(&i) {
                     if let Ok((_, _, _, _, mut visibility)) = query_range.get_mut(entity) {
                         *visibility = Visibility::Hidden;
-                    }
-                    pools.range_lines.return_entity(entity);
-                    if let Ok(mut pooled) = pooled_query.get_mut(entity) {
-                        pooled.in_use = false;
+                        pools.range_lines.return_entity(entity, PooledEntityType::CandlestickRange);
+                        if let Ok(mut pooled) = pooled_query.get_mut(entity) {
+                            pooled.in_use = false;
+                        }
                     }
                 }
 
                 // Calculate positions using ChartSpace::to_world()
                 let wick_bottom = price_pane.space.to_world(
-                    i, candle.low as f32,
-                    chart.visible_candle_start, chart.visible_candle_count
+                    i,
+                    candle.low as f32,
+                    chart.visible_candle_start,
+                    chart.visible_candle_count,
                 );
                 let wick_top = price_pane.space.to_world(
-                    i, candle.high as f32,
-                    chart.visible_candle_start, chart.visible_candle_count
+                    i,
+                    candle.high as f32,
+                    chart.visible_candle_start,
+                    chart.visible_candle_count,
                 );
                 let body_open = price_pane.space.to_world(
-                    i, candle.open as f32,
-                    chart.visible_candle_start, chart.visible_candle_count
+                    i,
+                    candle.open as f32,
+                    chart.visible_candle_start,
+                    chart.visible_candle_count,
                 );
                 let body_close = price_pane.space.to_world(
-                    i, candle.close as f32,
-                    chart.visible_candle_start, chart.visible_candle_count
+                    i,
+                    candle.close as f32,
+                    chart.visible_candle_start,
+                    chart.visible_candle_count,
                 );
 
                 let wick_center = Vec2::new(
@@ -154,7 +201,9 @@ pub fn render_candlesticks(
 
                 // UPDATE or GET FROM POOL wick entity
                 if let Some(&entity) = existing_wicks.get(&i) {
-                    if let Ok((_, _, mut transform, mut sprite, mut visibility)) = query_wicks.get_mut(entity) {
+                    if let Ok((_, _, mut transform, mut sprite, mut visibility)) =
+                        query_wicks.get_mut(entity)
+                    {
                         transform.translation = wick_center.extend(0.0);
                         if let Some(ref mut size) = sprite.custom_size {
                             *size = Vec2::new(1.0, wick_height);
@@ -164,7 +213,9 @@ pub fn render_candlesticks(
                     updated_wicks.insert(i);
                 } else if let Some(entity) = pools.wicks.get() {
                     // Reuse from pool
-                    if let Ok((_, mut wick, mut transform, mut sprite, mut visibility)) = query_wicks.get_mut(entity) {
+                    if let Ok((_, mut wick, mut transform, mut sprite, mut visibility)) =
+                        query_wicks.get_mut(entity)
+                    {
                         wick.candle_index = i;
                         transform.translation = wick_center.extend(0.0);
                         if let Some(ref mut size) = sprite.custom_size {
@@ -175,25 +226,30 @@ pub fn render_candlesticks(
                             pooled.in_use = true;
                         }
                         updated_wicks.insert(i);
+                    } else {
+                        // Return entity to pool if query failed
+                        pools.wicks.return_entity(entity, PooledEntityType::CandlestickWick);
                     }
                 } else {
                     // Pool exhausted - spawn new
-                    let new_entity = commands.spawn((
-                        Sprite {
-                            color: Color::srgb(0.5, 0.5, 0.5),
-                            custom_size: Some(Vec2::new(1.0, wick_height)),
-                            ..default()
-                        },
-                        Transform::from_translation(wick_center.extend(0.0)),
-                        CandlestickWick { candle_index: i },
-                        PooledEntity {
-                            entity_type: PooledEntityType::CandlestickWick,
-                            in_use: true,
-                        },
-                        PriceElement,
-                        PaneId::Price,
-                    )).id();
-                    pools.wicks.entities.push(new_entity);
+                    let new_entity = commands
+                        .spawn((
+                            Sprite {
+                                color: Color::srgb(0.5, 0.5, 0.5),
+                                custom_size: Some(Vec2::new(1.0, wick_height)),
+                                ..default()
+                            },
+                            Transform::from_translation(wick_center.extend(0.0)),
+                            CandlestickWick { candle_index: i },
+                            PooledEntity {
+                                entity_type: PooledEntityType::CandlestickWick,
+                                in_use: true,
+                            },
+                            PriceElement,
+                            PaneId::Price,
+                        ))
+                        .id();
+                    pools.wicks.add_entity(new_entity);
                     spawned_count += 1;
                 }
 
@@ -206,14 +262,16 @@ pub fn render_candlesticks(
                 );
 
                 let body_color = if candle.close >= candle.open {
-                    Color::srgb(0.0, 0.8, 0.2)  // Green
+                    Color::srgb(0.0, 0.8, 0.2) // Green
                 } else {
-                    Color::srgb(0.9, 0.2, 0.2)  // Red
+                    Color::srgb(0.9, 0.2, 0.2) // Red
                 };
 
                 // UPDATE or GET FROM POOL body entity
                 if let Some(&entity) = existing_bodies.get(&i) {
-                    if let Ok((_, _, mut transform, mut sprite, mut visibility)) = query_bodies.get_mut(entity) {
+                    if let Ok((_, _, mut transform, mut sprite, mut visibility)) =
+                        query_bodies.get_mut(entity)
+                    {
                         transform.translation = body_center.extend(1.0);
                         sprite.color = body_color;
                         if let Some(ref mut size) = sprite.custom_size {
@@ -224,7 +282,9 @@ pub fn render_candlesticks(
                     updated_bodies.insert(i);
                 } else if let Some(entity) = pools.bodies.get() {
                     // Reuse from pool
-                    if let Ok((_, mut body, mut transform, mut sprite, mut visibility)) = query_bodies.get_mut(entity) {
+                    if let Ok((_, mut body, mut transform, mut sprite, mut visibility)) =
+                        query_bodies.get_mut(entity)
+                    {
                         body.candle_index = i;
                         transform.translation = body_center.extend(1.0);
                         sprite.color = body_color;
@@ -236,25 +296,30 @@ pub fn render_candlesticks(
                             pooled.in_use = true;
                         }
                         updated_bodies.insert(i);
+                    } else {
+                        // Return entity to pool if query failed
+                        pools.bodies.return_entity(entity, PooledEntityType::CandlestickBody);
                     }
                 } else {
                     // Pool exhausted - spawn new
-                    let new_entity = commands.spawn((
-                        Sprite {
-                            color: body_color,
-                            custom_size: Some(Vec2::new(body_width, body_height)),
-                            ..default()
-                        },
-                        Transform::from_translation(body_center.extend(1.0)),
-                        CandlestickBody { candle_index: i },
-                        PooledEntity {
-                            entity_type: PooledEntityType::CandlestickBody,
-                            in_use: true,
-                        },
-                        PriceElement,
-                        PaneId::Price,
-                    )).id();
-                    pools.bodies.entities.push(new_entity);
+                    let new_entity = commands
+                        .spawn((
+                            Sprite {
+                                color: body_color,
+                                custom_size: Some(Vec2::new(body_width, body_height)),
+                                ..default()
+                            },
+                            Transform::from_translation(body_center.extend(1.0)),
+                            CandlestickBody { candle_index: i },
+                            PooledEntity {
+                                entity_type: PooledEntityType::CandlestickBody,
+                                in_use: true,
+                            },
+                            PriceElement,
+                            PaneId::Price,
+                        ))
+                        .id();
+                    pools.bodies.add_entity(new_entity);
                     spawned_count += 1;
                 }
             }
@@ -264,38 +329,42 @@ pub fn render_candlesticks(
                 if let Some(&entity) = existing_wicks.get(&i) {
                     if let Ok((_, _, _, _, mut visibility)) = query_wicks.get_mut(entity) {
                         *visibility = Visibility::Hidden;
-                    }
-                    pools.wicks.return_entity(entity);
-                    if let Ok(mut pooled) = pooled_query.get_mut(entity) {
-                        pooled.in_use = false;
+                        pools.wicks.return_entity(entity, PooledEntityType::CandlestickWick);
+                        if let Ok(mut pooled) = pooled_query.get_mut(entity) {
+                            pooled.in_use = false;
+                        }
                     }
                 }
                 if let Some(&entity) = existing_bodies.get(&i) {
                     if let Ok((_, _, _, _, mut visibility)) = query_bodies.get_mut(entity) {
                         *visibility = Visibility::Hidden;
-                    }
-                    pools.bodies.return_entity(entity);
-                    if let Ok(mut pooled) = pooled_query.get_mut(entity) {
-                        pooled.in_use = false;
+                        pools.bodies.return_entity(entity, PooledEntityType::CandlestickBody);
+                        if let Ok(mut pooled) = pooled_query.get_mut(entity) {
+                            pooled.in_use = false;
+                        }
                     }
                 }
                 if let Some(&entity) = existing_range.get(&i) {
                     if let Ok((_, _, _, _, mut visibility)) = query_range.get_mut(entity) {
                         *visibility = Visibility::Hidden;
-                    }
-                    pools.range_lines.return_entity(entity);
-                    if let Ok(mut pooled) = pooled_query.get_mut(entity) {
-                        pooled.in_use = false;
+                        pools.range_lines.return_entity(entity, PooledEntityType::CandlestickRange);
+                        if let Ok(mut pooled) = pooled_query.get_mut(entity) {
+                            pooled.in_use = false;
+                        }
                     }
                 }
 
                 let low_pos = price_pane.space.to_world(
-                    i, candle.low as f32,
-                    chart.visible_candle_start, chart.visible_candle_count
+                    i,
+                    candle.low as f32,
+                    chart.visible_candle_start,
+                    chart.visible_candle_count,
                 );
                 let high_pos = price_pane.space.to_world(
-                    i, candle.high as f32,
-                    chart.visible_candle_start, chart.visible_candle_count
+                    i,
+                    candle.high as f32,
+                    chart.visible_candle_start,
+                    chart.visible_candle_count,
                 );
 
                 let center = Vec2::new(
@@ -305,14 +374,16 @@ pub fn render_candlesticks(
                 let height = (high_pos.y - low_pos.y).abs().max(1.0);
 
                 let color = if candle.close >= candle.open {
-                    Color::srgb(0.0, 0.8, 0.2)  // Green
+                    Color::srgb(0.0, 0.8, 0.2) // Green
                 } else {
-                    Color::srgb(0.9, 0.2, 0.2)  // Red
+                    Color::srgb(0.9, 0.2, 0.2) // Red
                 };
 
                 // UPDATE or GET FROM POOL OHLC line entity
                 if let Some(&entity) = existing_ohlc.get(&i) {
-                    if let Ok((_, _, mut transform, mut sprite, mut visibility)) = query_ohlc.get_mut(entity) {
+                    if let Ok((_, _, mut transform, mut sprite, mut visibility)) =
+                        query_ohlc.get_mut(entity)
+                    {
                         transform.translation = center.extend(0.0);
                         sprite.color = color;
                         if let Some(ref mut size) = sprite.custom_size {
@@ -323,7 +394,9 @@ pub fn render_candlesticks(
                     updated_ohlc.insert(i);
                 } else if let Some(entity) = pools.ohlc_lines.get() {
                     // Reuse from pool
-                    if let Ok((_, mut ohlc, mut transform, mut sprite, mut visibility)) = query_ohlc.get_mut(entity) {
+                    if let Ok((_, mut ohlc, mut transform, mut sprite, mut visibility)) =
+                        query_ohlc.get_mut(entity)
+                    {
                         ohlc.candle_index = i;
                         transform.translation = center.extend(0.0);
                         sprite.color = color;
@@ -335,25 +408,30 @@ pub fn render_candlesticks(
                             pooled.in_use = true;
                         }
                         updated_ohlc.insert(i);
+                    } else {
+                        // Return entity to pool if query failed
+                        pools.ohlc_lines.return_entity(entity, PooledEntityType::CandlestickOHLC);
                     }
                 } else {
                     // Pool exhausted - spawn new
-                    let new_entity = commands.spawn((
-                        Sprite {
-                            color,
-                            custom_size: Some(Vec2::new(1.5, height)),
-                            ..default()
-                        },
-                        Transform::from_translation(center.extend(0.0)),
-                        CandlestickOHLCLine { candle_index: i },
-                        PooledEntity {
-                            entity_type: PooledEntityType::CandlestickOHLC,
-                            in_use: true,
-                        },
-                        PriceElement,
-                        PaneId::Price,
-                    )).id();
-                    pools.ohlc_lines.entities.push(new_entity);
+                    let new_entity = commands
+                        .spawn((
+                            Sprite {
+                                color,
+                                custom_size: Some(Vec2::new(1.5, height)),
+                                ..default()
+                            },
+                            Transform::from_translation(center.extend(0.0)),
+                            CandlestickOHLCLine { candle_index: i },
+                            PooledEntity {
+                                entity_type: PooledEntityType::CandlestickOHLC,
+                                in_use: true,
+                            },
+                            PriceElement,
+                            PaneId::Price,
+                        ))
+                        .id();
+                    pools.ohlc_lines.add_entity(new_entity);
                     spawned_count += 1;
                 }
             }
@@ -363,38 +441,42 @@ pub fn render_candlesticks(
                 if let Some(&entity) = existing_wicks.get(&i) {
                     if let Ok((_, _, _, _, mut visibility)) = query_wicks.get_mut(entity) {
                         *visibility = Visibility::Hidden;
-                    }
-                    pools.wicks.return_entity(entity);
-                    if let Ok(mut pooled) = pooled_query.get_mut(entity) {
-                        pooled.in_use = false;
+                        pools.wicks.return_entity(entity, PooledEntityType::CandlestickWick);
+                        if let Ok(mut pooled) = pooled_query.get_mut(entity) {
+                            pooled.in_use = false;
+                        }
                     }
                 }
                 if let Some(&entity) = existing_bodies.get(&i) {
                     if let Ok((_, _, _, _, mut visibility)) = query_bodies.get_mut(entity) {
                         *visibility = Visibility::Hidden;
-                    }
-                    pools.bodies.return_entity(entity);
-                    if let Ok(mut pooled) = pooled_query.get_mut(entity) {
-                        pooled.in_use = false;
+                        pools.bodies.return_entity(entity, PooledEntityType::CandlestickBody);
+                        if let Ok(mut pooled) = pooled_query.get_mut(entity) {
+                            pooled.in_use = false;
+                        }
                     }
                 }
                 if let Some(&entity) = existing_ohlc.get(&i) {
                     if let Ok((_, _, _, _, mut visibility)) = query_ohlc.get_mut(entity) {
                         *visibility = Visibility::Hidden;
-                    }
-                    pools.ohlc_lines.return_entity(entity);
-                    if let Ok(mut pooled) = pooled_query.get_mut(entity) {
-                        pooled.in_use = false;
+                        pools.ohlc_lines.return_entity(entity, PooledEntityType::CandlestickOHLC);
+                        if let Ok(mut pooled) = pooled_query.get_mut(entity) {
+                            pooled.in_use = false;
+                        }
                     }
                 }
 
                 let low_pos = price_pane.space.to_world(
-                    i, candle.low as f32,
-                    chart.visible_candle_start, chart.visible_candle_count
+                    i,
+                    candle.low as f32,
+                    chart.visible_candle_start,
+                    chart.visible_candle_count,
                 );
                 let high_pos = price_pane.space.to_world(
-                    i, candle.high as f32,
-                    chart.visible_candle_start, chart.visible_candle_count
+                    i,
+                    candle.high as f32,
+                    chart.visible_candle_start,
+                    chart.visible_candle_count,
                 );
 
                 let center = Vec2::new(
@@ -404,14 +486,16 @@ pub fn render_candlesticks(
                 let height = (high_pos.y - low_pos.y).abs().max(1.0);
 
                 let color = if candle.close >= candle.open {
-                    Color::srgb(0.0, 0.8, 0.2)  // Green
+                    Color::srgb(0.0, 0.8, 0.2) // Green
                 } else {
-                    Color::srgb(0.9, 0.2, 0.2)  // Red
+                    Color::srgb(0.9, 0.2, 0.2) // Red
                 };
 
                 // UPDATE or GET FROM POOL range line entity
                 if let Some(&entity) = existing_range.get(&i) {
-                    if let Ok((_, _, mut transform, mut sprite, mut visibility)) = query_range.get_mut(entity) {
+                    if let Ok((_, _, mut transform, mut sprite, mut visibility)) =
+                        query_range.get_mut(entity)
+                    {
                         transform.translation = center.extend(0.0);
                         sprite.color = color;
                         if let Some(ref mut size) = sprite.custom_size {
@@ -422,7 +506,9 @@ pub fn render_candlesticks(
                     updated_range.insert(i);
                 } else if let Some(entity) = pools.range_lines.get() {
                     // Reuse from pool
-                    if let Ok((_, mut range, mut transform, mut sprite, mut visibility)) = query_range.get_mut(entity) {
+                    if let Ok((_, mut range, mut transform, mut sprite, mut visibility)) =
+                        query_range.get_mut(entity)
+                    {
                         range.candle_index = i;
                         transform.translation = center.extend(0.0);
                         sprite.color = color;
@@ -434,25 +520,30 @@ pub fn render_candlesticks(
                             pooled.in_use = true;
                         }
                         updated_range.insert(i);
+                    } else {
+                        // Return entity to pool if query failed
+                        pools.range_lines.return_entity(entity, PooledEntityType::CandlestickRange);
                     }
                 } else {
                     // Pool exhausted - spawn new
-                    let new_entity = commands.spawn((
-                        Sprite {
-                            color,
-                            custom_size: Some(Vec2::new(0.5, height)),
-                            ..default()
-                        },
-                        Transform::from_translation(center.extend(0.0)),
-                        CandlestickRangeLine { candle_index: i },
-                        PooledEntity {
-                            entity_type: PooledEntityType::CandlestickRange,
-                            in_use: true,
-                        },
-                        PriceElement,
-                        PaneId::Price,
-                    )).id();
-                    pools.range_lines.entities.push(new_entity);
+                    let new_entity = commands
+                        .spawn((
+                            Sprite {
+                                color,
+                                custom_size: Some(Vec2::new(0.5, height)),
+                                ..default()
+                            },
+                            Transform::from_translation(center.extend(0.0)),
+                            CandlestickRangeLine { candle_index: i },
+                            PooledEntity {
+                                entity_type: PooledEntityType::CandlestickRange,
+                                in_use: true,
+                            },
+                            PriceElement,
+                            PaneId::Price,
+                        ))
+                        .id();
+                    pools.range_lines.add_entity(new_entity);
                     spawned_count += 1;
                 }
             }
@@ -465,54 +556,55 @@ pub fn render_candlesticks(
         if !updated_wicks.contains(index) {
             if let Ok((_, _, _, _, mut visibility)) = query_wicks.get_mut(*entity) {
                 *visibility = Visibility::Hidden;
+                pools.wicks.return_entity(*entity, PooledEntityType::CandlestickWick);
+                if let Ok(mut pooled) = pooled_query.get_mut(*entity) {
+                    pooled.in_use = false;
+                }
+                hidden_count += 1;
             }
-            pools.wicks.return_entity(*entity);
-            if let Ok(mut pooled) = pooled_query.get_mut(*entity) {
-                pooled.in_use = false;
-            }
-            hidden_count += 1;
         }
     }
     for (index, entity) in existing_bodies.iter() {
         if !updated_bodies.contains(index) {
             if let Ok((_, _, _, _, mut visibility)) = query_bodies.get_mut(*entity) {
                 *visibility = Visibility::Hidden;
+                pools.bodies.return_entity(*entity, PooledEntityType::CandlestickBody);
+                if let Ok(mut pooled) = pooled_query.get_mut(*entity) {
+                    pooled.in_use = false;
+                }
+                hidden_count += 1;
             }
-            pools.bodies.return_entity(*entity);
-            if let Ok(mut pooled) = pooled_query.get_mut(*entity) {
-                pooled.in_use = false;
-            }
-            hidden_count += 1;
         }
     }
     for (index, entity) in existing_ohlc.iter() {
         if !updated_ohlc.contains(index) {
             if let Ok((_, _, _, _, mut visibility)) = query_ohlc.get_mut(*entity) {
                 *visibility = Visibility::Hidden;
+                pools.ohlc_lines.return_entity(*entity, PooledEntityType::CandlestickOHLC);
+                if let Ok(mut pooled) = pooled_query.get_mut(*entity) {
+                    pooled.in_use = false;
+                }
+                hidden_count += 1;
             }
-            pools.ohlc_lines.return_entity(*entity);
-            if let Ok(mut pooled) = pooled_query.get_mut(*entity) {
-                pooled.in_use = false;
-            }
-            hidden_count += 1;
         }
     }
     for (index, entity) in existing_range.iter() {
         if !updated_range.contains(index) {
             if let Ok((_, _, _, _, mut visibility)) = query_range.get_mut(*entity) {
                 *visibility = Visibility::Hidden;
+                pools.range_lines.return_entity(*entity, PooledEntityType::CandlestickRange);
+                if let Ok(mut pooled) = pooled_query.get_mut(*entity) {
+                    pooled.in_use = false;
+                }
+                hidden_count += 1;
             }
-            pools.range_lines.return_entity(*entity);
-            if let Ok(mut pooled) = pooled_query.get_mut(*entity) {
-                pooled.in_use = false;
-            }
-            hidden_count += 1;
         }
     }
 
     #[cfg(debug_assertions)]
     {
-        let total_entities = updated_wicks.len() + updated_bodies.len() + updated_ohlc.len() + updated_range.len();
+        let total_entities =
+            updated_wicks.len() + updated_bodies.len() + updated_ohlc.len() + updated_range.len();
         let (wick_total, wick_avail) = pools.wicks.stats();
         let (body_total, body_avail) = pools.bodies.stats();
         let (ohlc_total, ohlc_avail) = pools.ohlc_lines.stats();
@@ -530,11 +622,29 @@ pub fn render_candlesticks(
         );
         println!(
             "Pool stats - Wicks: {}/{} | Bodies: {}/{} | OHLC: {}/{} | Range: {}/{}",
-            wick_avail, wick_total,
-            body_avail, body_total,
-            ohlc_avail, ohlc_total,
-            range_avail, range_total
+            wick_avail,
+            wick_total,
+            body_avail,
+            body_total,
+            ohlc_avail,
+            ohlc_total,
+            range_avail,
+            range_total
         );
+
+        // Warn if pools are getting depleted
+        if wick_avail < wick_total / 10 {
+            eprintln!("WARNING: Wick pool low: {}/{}", wick_avail, wick_total);
+        }
+        if body_avail < body_total / 10 {
+            eprintln!("WARNING: Body pool low: {}/{}", body_avail, body_total);
+        }
+        if ohlc_avail < ohlc_total / 10 {
+            eprintln!("WARNING: OHLC pool low: {}/{}", ohlc_avail, ohlc_total);
+        }
+        if range_avail < range_total / 10 {
+            eprintln!("WARNING: Range pool low: {}/{}", range_avail, range_total);
+        }
     }
 }
 
@@ -543,7 +653,13 @@ pub fn render_volume_bars(
     chart: Res<Chart>,
     config: Res<CandlestickLODConfig>,
     mut pools: ResMut<EntityPools>,
-    mut query: Query<(Entity, &mut VolumeBar, &mut Transform, &mut Sprite, &mut Visibility)>,
+    mut query: Query<(
+        Entity,
+        &mut VolumeBar,
+        &mut Transform,
+        &mut Sprite,
+        &mut Visibility,
+    )>,
     mut pooled_query: Query<&mut PooledEntity>,
 ) {
     if !chart.needs_redraw {
@@ -551,8 +667,7 @@ pub fn render_volume_bars(
     }
 
     // Find the Volume pane
-    let volume_pane = chart.panes.iter()
-        .find(|p| matches!(p.id, PaneId::Volume));
+    let volume_pane = chart.panes.iter().find(|p| matches!(p.id, PaneId::Volume));
 
     if volume_pane.is_none() {
         return;
@@ -560,8 +675,7 @@ pub fn render_volume_bars(
     let volume_pane = volume_pane.unwrap();
 
     // Find the Price pane to get candle width
-    let price_pane = chart.panes.iter()
-        .find(|p| matches!(p.id, PaneId::Price));
+    let price_pane = chart.panes.iter().find(|p| matches!(p.id, PaneId::Price));
 
     if price_pane.is_none() {
         return;
@@ -573,7 +687,7 @@ pub fn render_volume_bars(
         // Hide all volume bars and return to pool
         for (entity, _, _, _, mut visibility) in query.iter_mut() {
             *visibility = Visibility::Hidden;
-            pools.volume_bars.return_entity(entity);
+            pools.volume_bars.return_entity(entity, PooledEntityType::VolumeBar);
             if let Ok(mut pooled) = pooled_query.get_mut(entity) {
                 pooled.in_use = false;
             }
@@ -607,12 +721,16 @@ pub fn render_volume_bars(
 
         // Calculate bottom (0) and top (volume) positions
         let bar_bottom = volume_pane.space.to_world(
-            i, 0.0,
-            chart.visible_candle_start, chart.visible_candle_count
+            i,
+            0.0,
+            chart.visible_candle_start,
+            chart.visible_candle_count,
         );
         let bar_top = volume_pane.space.to_world(
-            i, candle.volume as f32,
-            chart.visible_candle_start, chart.visible_candle_count
+            i,
+            candle.volume as f32,
+            chart.visible_candle_start,
+            chart.visible_candle_count,
         );
 
         let bar_center = Vec2::new(
@@ -632,9 +750,9 @@ pub fn render_volume_bars(
 
         // Color based on candle direction
         let bar_color = if candle.close >= candle.open {
-            Color::srgba(0.0, 0.8, 0.2, 0.6)  // Green with transparency
+            Color::srgba(0.0, 0.8, 0.2, 0.6) // Green with transparency
         } else {
-            Color::srgba(0.9, 0.2, 0.2, 0.6)  // Red with transparency
+            Color::srgba(0.9, 0.2, 0.2, 0.6) // Red with transparency
         };
 
         // UPDATE or GET FROM POOL volume bar entity
@@ -651,7 +769,9 @@ pub fn render_volume_bars(
             updated_bars.insert(i);
         } else if let Some(entity) = pools.volume_bars.get() {
             // Reuse from pool
-            if let Ok((_, mut bar, mut transform, mut sprite, mut visibility)) = query.get_mut(entity) {
+            if let Ok((_, mut bar, mut transform, mut sprite, mut visibility)) =
+                query.get_mut(entity)
+            {
                 bar.candle_index = i;
                 transform.translation = bar_center.extend(0.0);
                 sprite.color = bar_color;
@@ -663,25 +783,30 @@ pub fn render_volume_bars(
                     pooled.in_use = true;
                 }
                 updated_bars.insert(i);
+            } else {
+                // Return entity to pool if query failed
+                pools.volume_bars.return_entity(entity, PooledEntityType::VolumeBar);
             }
         } else {
             // Pool exhausted - spawn new
-            let new_entity = commands.spawn((
-                Sprite {
-                    color: bar_color,
-                    custom_size: Some(Vec2::new(bar_width, bar_height)),
-                    ..default()
-                },
-                Transform::from_translation(bar_center.extend(0.0)),
-                VolumeBar { candle_index: i },
-                PooledEntity {
-                    entity_type: PooledEntityType::VolumeBar,
-                    in_use: true,
-                },
-                VolumeElement,
-                PaneId::Volume,
-            )).id();
-            pools.volume_bars.entities.push(new_entity);
+            let new_entity = commands
+                .spawn((
+                    Sprite {
+                        color: bar_color,
+                        custom_size: Some(Vec2::new(bar_width, bar_height)),
+                        ..default()
+                    },
+                    Transform::from_translation(bar_center.extend(0.0)),
+                    VolumeBar { candle_index: i },
+                    PooledEntity {
+                        entity_type: PooledEntityType::VolumeBar,
+                        in_use: true,
+                    },
+                    VolumeElement,
+                    PaneId::Volume,
+                ))
+                .id();
+            pools.volume_bars.add_entity(new_entity);
             spawned_count += 1;
         }
     }
@@ -692,12 +817,12 @@ pub fn render_volume_bars(
         if !updated_bars.contains(index) {
             if let Ok((_, _, _, _, mut visibility)) = query.get_mut(*entity) {
                 *visibility = Visibility::Hidden;
+                pools.volume_bars.return_entity(*entity, PooledEntityType::VolumeBar);
+                if let Ok(mut pooled) = pooled_query.get_mut(*entity) {
+                    pooled.in_use = false;
+                }
+                hidden_count += 1;
             }
-            pools.volume_bars.return_entity(*entity);
-            if let Ok(mut pooled) = pooled_query.get_mut(*entity) {
-                pooled.in_use = false;
-            }
-            hidden_count += 1;
         }
     }
 
@@ -718,10 +843,7 @@ pub fn render_volume_bars(
 }
 
 /// Initialize persistent crosshair entities (called once at startup from setup)
-pub fn init_crosshair(
-    commands: &mut Commands,
-    chart: &Chart,
-) {
+pub fn init_crosshair(commands: &mut Commands, chart: &Chart) {
     let mut horizontal_lines = Vec::new();
     let mut price_labels = Vec::new();
 
@@ -748,16 +870,18 @@ pub fn init_crosshair(
 
     for i in 0..num_segments {
         let segment_y = chart_bottom + (i as f32 * PATTERN_LENGTH) + (DASH_LENGTH / 2.0);
-        let segment_id = commands.spawn((
-            Sprite {
-                color: Color::srgba(1.0, 1.0, 1.0, 0.6),
-                custom_size: Some(Vec2::new(1.0, DASH_LENGTH)),
-                ..default()
-            },
-            Transform::from_translation(Vec3::new(0.0, segment_y, 3.0)),
-            Visibility::Hidden,
-            CrosshairElement,
-        )).id();
+        let segment_id = commands
+            .spawn((
+                Sprite {
+                    color: Color::srgba(1.0, 1.0, 1.0, 0.6),
+                    custom_size: Some(Vec2::new(1.0, DASH_LENGTH)),
+                    ..default()
+                },
+                Transform::from_translation(Vec3::new(0.0, segment_y, 3.0)),
+                Visibility::Hidden,
+                CrosshairElement,
+            ))
+            .id();
         vertical_line_segments.push(segment_id);
     }
 
@@ -772,67 +896,75 @@ pub fn init_crosshair(
 
         for i in 0..num_h_segments {
             let segment_x = viewport.min.x + (i as f32 * PATTERN_LENGTH) + (DASH_LENGTH / 2.0);
-            let segment_id = commands.spawn((
-                Sprite {
-                    color: Color::srgba(1.0, 1.0, 1.0, 0.6),
-                    custom_size: Some(Vec2::new(DASH_LENGTH, 1.0)),
-                    ..default()
-                },
-                Transform::from_translation(Vec3::new(segment_x, 0.0, 3.0)),
-                Visibility::Hidden,
-                CrosshairElement,
-            )).id();
+            let segment_id = commands
+                .spawn((
+                    Sprite {
+                        color: Color::srgba(1.0, 1.0, 1.0, 0.6),
+                        custom_size: Some(Vec2::new(DASH_LENGTH, 1.0)),
+                        ..default()
+                    },
+                    Transform::from_translation(Vec3::new(segment_x, 0.0, 3.0)),
+                    Visibility::Hidden,
+                    CrosshairElement,
+                ))
+                .id();
             h_segments.push(segment_id);
         }
         horizontal_lines.push((pane.id, h_segments));
 
         // Price label for this pane
-        let label = commands.spawn((
+        let label = commands
+            .spawn((
+                Text2d::new(""),
+                TextFont {
+                    font_size: 14.0,
+                    ..default()
+                },
+                TextColor(Color::srgb(1.0, 1.0, 0.0)),
+                Anchor::CENTER_LEFT,
+                Transform::from_translation(Vec3::new(chart_right + 50.0, 0.0, 4.0)),
+                Visibility::Hidden,
+                CrosshairElement,
+            ))
+            .id();
+        price_labels.push((pane.id, label));
+    }
+
+    // Spawn time label
+    let time_label = commands
+        .spawn((
             Text2d::new(""),
             TextFont {
                 font_size: 14.0,
                 ..default()
             },
             TextColor(Color::srgb(1.0, 1.0, 0.0)),
-            Anchor::CENTER_LEFT,
-            Transform::from_translation(Vec3::new(chart_right + 50.0, 0.0, 4.0)),
+            Anchor::CENTER,
+            Transform::from_translation(Vec3::new(0.0, chart_bottom - 40.0, 4.0)),
             Visibility::Hidden,
             CrosshairElement,
-        )).id();
-        price_labels.push((pane.id, label));
-    }
-
-    // Spawn time label
-    let time_label = commands.spawn((
-        Text2d::new(""),
-        TextFont {
-            font_size: 14.0,
-            ..default()
-        },
-        TextColor(Color::srgb(1.0, 1.0, 0.0)),
-        Anchor::CENTER,
-        Transform::from_translation(Vec3::new(0.0, chart_bottom - 40.0, 4.0)),
-        Visibility::Hidden,
-        CrosshairElement,
-    )).id();
+        ))
+        .id();
 
     // Spawn OHLCV info box
-    let ohlcv_box = commands.spawn((
-        Text2d::new(""),
-        TextFont {
-            font_size: 16.0,
-            ..default()
-        },
-        TextColor(Color::srgb(1.0, 1.0, 1.0)),
-        Anchor::TOP_LEFT,
-        Transform::from_translation(Vec3::new(
-            first_pane.space.viewport.min.x + 100.0,
-            first_pane.space.viewport.max.y - 40.0,
-            4.0
-        )),
-        Visibility::Hidden,
-        CrosshairElement,
-    )).id();
+    let ohlcv_box = commands
+        .spawn((
+            Text2d::new(""),
+            TextFont {
+                font_size: 16.0,
+                ..default()
+            },
+            TextColor(Color::srgb(1.0, 1.0, 1.0)),
+            Anchor::TOP_LEFT,
+            Transform::from_translation(Vec3::new(
+                first_pane.space.viewport.min.x + 100.0,
+                first_pane.space.viewport.max.y - 40.0,
+                4.0,
+            )),
+            Visibility::Hidden,
+            CrosshairElement,
+        ))
+        .id();
 
     // Insert the resource
     commands.insert_resource(CrosshairEntities {
@@ -884,8 +1016,8 @@ pub fn render_grid_and_axes(
                 // visible_price_max = actual_max * 1.12
                 // Grid lines should only go up to actual_max / visible_price_max = 1/1.12
                 1.0 / 1.12
-            },
-            _ => 1.0
+            }
+            _ => 1.0,
         };
 
         for i in 0..=grid.y_tick_count {
@@ -896,8 +1028,8 @@ pub fn render_grid_and_axes(
                 continue;
             }
 
-            let value = pane.space.visible_price_min +
-                value_percent * (pane.space.visible_price_max - pane.space.visible_price_min);
+            let value = pane.space.visible_price_min
+                + value_percent * (pane.space.visible_price_max - pane.space.visible_price_min);
 
             let y = viewport.min.y + value_percent * viewport.height();
 
@@ -907,11 +1039,11 @@ pub fn render_grid_and_axes(
 
             commands.spawn((
                 Sprite {
-                        color: grid.grid_color,
-                        custom_size: Some(Vec2::new(line_width, 1.0)),
-                        ..default()
-                    },
-            Transform::from_translation(line_center.extend(-1.0)),
+                    color: grid.grid_color,
+                    custom_size: Some(Vec2::new(line_width, 1.0)),
+                    ..default()
+                },
+                Transform::from_translation(line_center.extend(-1.0)),
                 GridElement,
             ));
 
@@ -922,7 +1054,7 @@ pub fn render_grid_and_axes(
                 // Format based on pane type
                 let label_text = match pane.pane_type {
                     PaneType::Volume => format_volume(value / 1.12),
-                    _ => format!("{:.2}", value)
+                    _ => format!("{:.2}", value),
                 };
 
                 commands.spawn((
@@ -953,11 +1085,7 @@ pub fn render_grid_and_axes(
                 custom_size: Some(Vec2::new(viewport.width(), border_thickness)),
                 ..default()
             },
-            Transform::from_translation(Vec3::new(
-                viewport.center().x,
-                viewport.max.y,
-                0.4,
-            )),
+            Transform::from_translation(Vec3::new(viewport.center().x, viewport.max.y, 0.4)),
             GridElement,
         ));
 
@@ -968,11 +1096,7 @@ pub fn render_grid_and_axes(
                 custom_size: Some(Vec2::new(viewport.width(), border_thickness)),
                 ..default()
             },
-            Transform::from_translation(Vec3::new(
-                viewport.center().x,
-                viewport.min.y,
-                0.4,
-            )),
+            Transform::from_translation(Vec3::new(viewport.center().x, viewport.min.y, 0.4)),
             GridElement,
         ));
 
@@ -983,11 +1107,7 @@ pub fn render_grid_and_axes(
                 custom_size: Some(Vec2::new(border_thickness, viewport.height())),
                 ..default()
             },
-            Transform::from_translation(Vec3::new(
-                viewport.min.x,
-                viewport.center().y,
-                0.4,
-            )),
+            Transform::from_translation(Vec3::new(viewport.min.x, viewport.center().y, 0.4)),
             GridElement,
         ));
 
@@ -998,11 +1118,7 @@ pub fn render_grid_and_axes(
                 custom_size: Some(Vec2::new(border_thickness, viewport.height())),
                 ..default()
             },
-            Transform::from_translation(Vec3::new(
-                viewport.max.x,
-                viewport.center().y,
-                0.4,
-            )),
+            Transform::from_translation(Vec3::new(viewport.max.x, viewport.center().y, 0.4)),
             GridElement,
         ));
     }
@@ -1042,8 +1158,8 @@ pub fn render_grid_and_axes(
 
         for i in 0..=grid.x_tick_count {
             let candle_percent = i as f32 / grid.x_tick_count as f32;
-            let candle_index = chart.visible_candle_start +
-                (candle_percent * chart.visible_candle_count as f32) as usize;
+            let candle_index = chart.visible_candle_start
+                + (candle_percent * chart.visible_candle_count as f32) as usize;
 
             if candle_index >= chart.candles.len() {
                 continue;
@@ -1057,11 +1173,11 @@ pub fn render_grid_and_axes(
 
             commands.spawn((
                 Sprite {
-                        color: grid.grid_color,
-                        custom_size: Some(Vec2::new(1.0, line_height)),
-                        ..default()
-                    },
-            Transform::from_translation(line_center.extend(-1.0)),
+                    color: grid.grid_color,
+                    custom_size: Some(Vec2::new(1.0, line_height)),
+                    ..default()
+                },
+                Transform::from_translation(line_center.extend(-1.0)),
                 GridElement,
             ));
         }
@@ -1071,8 +1187,8 @@ pub fn render_grid_and_axes(
     if axes.show_x_labels {
         for i in 0..=grid.x_tick_count {
             let candle_percent = i as f32 / grid.x_tick_count as f32;
-            let candle_index = chart.visible_candle_start +
-                (candle_percent * chart.visible_candle_count as f32) as usize;
+            let candle_index = chart.visible_candle_start
+                + (candle_percent * chart.visible_candle_count as f32) as usize;
 
             if candle_index >= chart.candles.len() {
                 continue;
@@ -1083,8 +1199,8 @@ pub fn render_grid_and_axes(
             let label_y = chart_bottom - 40.0;
 
             // Format timestamp using chrono
-            let datetime = DateTime::<Utc>::from_timestamp(candle.time / 1000, 0)
-                .unwrap_or_default();
+            let datetime =
+                DateTime::<Utc>::from_timestamp(candle.time / 1000, 0).unwrap_or_default();
             let label_text = datetime.format("%m/%d %H:%M").to_string();
 
             commands.spawn((
@@ -1153,9 +1269,11 @@ pub fn update_crosshair(
     mut cursor_options: Query<&mut CursorOptions, With<Window>>,
 ) {
     // ========== OPTIMIZATION: Calculate visibility state ONCE ==========
-    let mouse_in_chart = !chart.panes.is_empty() && chart.panes.iter().any(|pane| {
-        pane.space.viewport.contains(interaction.mouse_pos)
-    });
+    let mouse_in_chart = !chart.panes.is_empty()
+        && chart
+            .panes
+            .iter()
+            .any(|pane| pane.space.viewport.contains(interaction.mouse_pos));
 
     let should_show_crosshair = crosshair.enabled
         && !chart.panes.is_empty()
@@ -1217,10 +1335,14 @@ pub fn update_crosshair(
             let viewport = &pane.space.viewport;
 
             // Find entities for this pane
-            let h_line_segments = crosshair_entities.horizontal_lines.iter()
+            let h_line_segments = crosshair_entities
+                .horizontal_lines
+                .iter()
                 .find(|(id, _)| *id == pane.id)
                 .map(|(_, segments)| segments);
-            let label_entity = crosshair_entities.price_labels.iter()
+            let label_entity = crosshair_entities
+                .price_labels
+                .iter()
                 .find(|(id, _)| *id == pane.id)
                 .map(|(_, e)| *e);
 
@@ -1244,7 +1366,7 @@ pub fn update_crosshair(
                         let (_, value_at_cursor) = pane.space.from_world(
                             interaction.mouse_pos,
                             chart.visible_candle_start,
-                            chart.visible_candle_count
+                            chart.visible_candle_count,
                         );
 
                         if let Ok(mut text) = texts.get_mut(entity) {
@@ -1282,7 +1404,11 @@ pub fn update_crosshair(
 
     // ========== FIND CANDLE AT CURSOR ==========
     let (candle_index, _) = if let Some(pane) = chart.panes.first() {
-        pane.space.from_world(interaction.mouse_pos, chart.visible_candle_start, chart.visible_candle_count)
+        pane.space.from_world(
+            interaction.mouse_pos,
+            chart.visible_candle_start,
+            chart.visible_candle_count,
+        )
     } else {
         return;
     };
@@ -1301,8 +1427,8 @@ pub fn update_crosshair(
 
         // ========== UPDATE TIME LABEL TEXT (only when candle changes) ==========
         if crosshair.show_time_label {
-            let datetime = DateTime::<Utc>::from_timestamp(candle.time / 1000, 0)
-                .unwrap_or_default();
+            let datetime =
+                DateTime::<Utc>::from_timestamp(candle.time / 1000, 0).unwrap_or_default();
             let label_text = datetime.format("%m/%d %H:%M").to_string();
 
             if let Ok(mut text) = texts.get_mut(crosshair_entities.time_label) {
@@ -1332,13 +1458,9 @@ pub fn update_crosshair(
     }
 }
 
-pub fn render_moving_averages(
-    mut gizmos: Gizmos,
-    chart: Res<Chart>,
-) {
+pub fn render_moving_averages(mut gizmos: Gizmos, chart: Res<Chart>) {
     // Find the Price pane (indicators overlay on price)
-    let price_pane = chart.panes.iter()
-        .find(|p| matches!(p.id, PaneId::Price));
+    let price_pane = chart.panes.iter().find(|p| matches!(p.id, PaneId::Price));
 
     if price_pane.is_none() {
         return;
@@ -1362,7 +1484,9 @@ pub fn render_moving_averages(
         // Draw continuous line connecting MA points
         for i in start..(end - 1) {
             // Need both current and next values to draw a line segment
-            if let (Some(curr_value), Some(next_value)) = (ma.values[i], ma.values.get(i + 1).and_then(|v| *v)) {
+            if let (Some(curr_value), Some(next_value)) =
+                (ma.values[i], ma.values.get(i + 1).and_then(|v| *v))
+            {
                 // Convert to world coordinates
                 let curr_pos = price_pane.space.to_world(
                     i,

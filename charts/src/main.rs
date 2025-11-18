@@ -10,7 +10,8 @@ use bevy::camera::Camera2d;
 use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
 use bevy::prelude::*;
 use bevy::remote::http::RemoteHttpPlugin;
-use bevy::remote::{BrpError, BrpResult, RemotePlugin};
+use bevy::remote::{BrpResult, RemotePlugin};
+use bevy::time::common_conditions::on_timer;
 use bevy::window::PresentMode;
 use chat_ui::prelude::*;
 use chrono::NaiveDate;
@@ -18,8 +19,9 @@ use clap::Parser;
 use focus::*;
 use interaction::*;
 use rendering::*;
-use screenshot::{take_screenshot, crop_screenshot_to_chart};
+use screenshot::{crop_screenshot_to_chart, take_screenshot};
 use serde_json::Value;
+use std::time::Duration;
 use types::*;
 // use ui_layout::ChartViewport;
 
@@ -48,7 +50,10 @@ struct ChartArgs {
     end: String,
 
     /// Database path (optional, defaults to flowsurface database)
-    #[arg(long, default_value = "/home/molaco/.local/share/flowsurface/flowsurface.duckdb")]
+    #[arg(
+        long,
+        default_value = "/home/molaco/.local/share/flowsurface/flowsurface.duckdb"
+    )]
     db_path: String,
 }
 
@@ -89,7 +94,8 @@ fn validate_data_exists(
     end_time: i64,
     ticker_symbol: &str,
 ) -> Result<usize> {
-    let count = db.check_data_exists(ticker_id, timeframe, start_time, end_time)
+    let count = db
+        .check_data_exists(ticker_id, timeframe, start_time, end_time)
         .context("Failed to check data existence")?;
 
     if count == 0 {
@@ -143,6 +149,158 @@ fn update_chart_context(chart: Res<Chart>, mut chat_state: ResMut<ChatState>) {
 }
 
 // ============================================================================
+// ENTITY POOL HEALTH MONITORING
+// ============================================================================
+
+/// Cleanup system to detect and remove zombie entities from pools
+fn cleanup_entity_pools(mut pools: ResMut<EntityPools>, query: Query<Entity, With<PooledEntity>>) {
+    let valid_entities: std::collections::HashSet<Entity> = query.iter().collect();
+
+    let mut removed_total = 0;
+
+    // Clean wicks pool
+    let removed = cleanup_pool(&mut pools.wicks, &valid_entities);
+    removed_total += removed;
+
+    // Clean bodies pool
+    let removed = cleanup_pool(&mut pools.bodies, &valid_entities);
+    removed_total += removed;
+
+    // Clean OHLC pool
+    let removed = cleanup_pool(&mut pools.ohlc_lines, &valid_entities);
+    removed_total += removed;
+
+    // Clean range pool
+    let removed = cleanup_pool(&mut pools.range_lines, &valid_entities);
+    removed_total += removed;
+
+    // Clean volume pool
+    let removed = cleanup_pool(&mut pools.volume_bars, &valid_entities);
+    removed_total += removed;
+
+    if removed_total > 0 {
+        println!("Cleaned {} zombie entities from pools", removed_total);
+    }
+}
+
+/// Helper function to cleanup a single pool
+fn cleanup_pool(
+    pool: &mut EntityPool,
+    valid_entities: &std::collections::HashSet<Entity>,
+) -> usize {
+    let initial_count = pool.all_entities.len();
+
+    // Remove invalid entities from all_entities
+    pool.all_entities
+        .retain(|entity| valid_entities.contains(entity));
+
+    // Remove invalid entities from available
+    pool.available
+        .retain(|entity| valid_entities.contains(entity));
+
+    initial_count - pool.all_entities.len()
+}
+
+/// Shrink pools that have grown beyond initial size
+fn shrink_entity_pools(
+    mut commands: Commands,
+    mut pools: ResMut<EntityPools>,
+    config: Res<EntityPoolConfig>,
+    query: Query<Entity, (With<PooledEntity>, Without<Visibility>)>,
+) {
+    if !config.enabled {
+        return;
+    }
+
+    let target_size = config.initial_pool_size;
+
+    // Shrink each pool
+    shrink_pool(
+        &mut commands,
+        &mut pools.wicks,
+        target_size,
+        &query,
+        "Wicks",
+    );
+    shrink_pool(
+        &mut commands,
+        &mut pools.bodies,
+        target_size,
+        &query,
+        "Bodies",
+    );
+    shrink_pool(
+        &mut commands,
+        &mut pools.ohlc_lines,
+        target_size,
+        &query,
+        "OHLC",
+    );
+    shrink_pool(
+        &mut commands,
+        &mut pools.range_lines,
+        target_size,
+        &query,
+        "Range",
+    );
+    shrink_pool(
+        &mut commands,
+        &mut pools.volume_bars,
+        target_size,
+        &query,
+        "Volume",
+    );
+}
+
+/// Helper function to shrink a single pool
+fn shrink_pool(
+    commands: &mut Commands,
+    pool: &mut EntityPool,
+    target_size: usize,
+    query: &Query<Entity, (With<PooledEntity>, Without<Visibility>)>,
+    pool_name: &str,
+) {
+    let current_size = pool.all_entities.len();
+
+    if current_size <= target_size {
+        return;
+    }
+
+    let excess = current_size - target_size;
+    let to_remove = excess.min(50); // Remove max 50 entities per cycle
+
+    let mut removed = 0;
+
+    // Only remove available (unused) entities
+    let available_entities: Vec<Entity> = pool
+        .available
+        .iter()
+        .copied()
+        .take(to_remove)
+        .collect();
+
+    for entity in available_entities.iter() {
+        // Verify entity is actually unused (hidden/off-screen)
+        if query.contains(*entity) {
+            commands.entity(*entity).despawn();
+            pool.all_entities.remove(entity);
+            pool.available.remove(entity);
+            removed += 1;
+        }
+    }
+
+    if removed > 0 {
+        println!(
+            "Shrunk {} pool: removed {} entities ({} -> {})",
+            pool_name,
+            removed,
+            current_size,
+            pool.all_entities.len()
+        );
+    }
+}
+
+// ============================================================================
 // MAIN
 // ============================================================================
 
@@ -153,8 +311,10 @@ fn main() {
     // Validate arguments before starting Bevy app
     match validate_cli_args(&args) {
         Ok(_) => {
-            println!("Loading chart for {} {} from {} to {}",
-                args.ticker, args.timeframe, args.start, args.end);
+            println!(
+                "Loading chart for {} {} from {} to {}",
+                args.ticker, args.timeframe, args.start, args.end
+            );
         }
         Err(e) => {
             eprintln!("Error: {:#}", e);
@@ -187,7 +347,16 @@ fn main() {
         .add_systems(Startup, setup_timeframe_label)
         .add_systems(PostStartup, ui_layout::reparent_chat_to_container)
         .add_systems(Update, update_chart_context)
-        .add_systems(Update, (handle_focus_tab, handle_focus_click, update_focus_indicators, manage_text_input_focus).chain())
+        .add_systems(
+            Update,
+            (
+                handle_focus_tab,
+                handle_focus_click,
+                update_focus_indicators,
+                manage_text_input_focus,
+            )
+                .chain(),
+        )
         .add_systems(Update, toggle_volume_pane)
         .add_systems(Update, toggle_sma_indicators)
         .add_systems(Update, check_lazy_load)
@@ -196,6 +365,14 @@ fn main() {
         .add_systems(Update, update_timeframe_label)
         .add_systems(Update, handle_timeframe_keyboard)
         .add_systems(Update, handle_timeframe_change)
+        .add_systems(
+            Update,
+            cleanup_entity_pools.run_if(on_timer(Duration::from_secs(10))),
+        )
+        .add_systems(
+            Update,
+            shrink_entity_pools.run_if(on_timer(Duration::from_secs(30))),
+        )
         .add_systems(Update, (handle_mouse_input, update_crosshair).chain()) // Ensures crosshair updates immediately after mouse input
         .add_systems(
             Update,
@@ -231,7 +408,14 @@ fn validate_cli_args(args: &ChartArgs) -> Result<()> {
     }
 
     // Check that data exists
-    let count = validate_data_exists(&db, ticker_id, &args.timeframe, start_time, end_time, &args.ticker)?;
+    let count = validate_data_exists(
+        &db,
+        ticker_id,
+        &args.timeframe,
+        start_time,
+        end_time,
+        &args.ticker,
+    )?;
 
     println!("Found {} klines in database", count);
 
@@ -382,7 +566,10 @@ fn setup(
                 println!("Available timeframes: {:?}", timeframes);
                 timeframe_mgr.available_timeframes = timeframes;
             } else {
-                println!("Warning: No timeframes found in database for ticker_id {}", ticker_id);
+                println!(
+                    "Warning: No timeframes found in database for ticker_id {}",
+                    ticker_id
+                );
             }
         }
         Err(e) => {
@@ -406,10 +593,7 @@ fn setup(
 }
 
 /// Initialize entity pools at startup
-fn init_entity_pools(
-    mut commands: Commands,
-    config: Res<EntityPoolConfig>,
-) {
+fn init_entity_pools(mut commands: Commands, config: Res<EntityPoolConfig>) {
     if !config.enabled {
         commands.insert_resource(EntityPools::new());
         return;
@@ -420,107 +604,125 @@ fn init_entity_pools(
     // Pre-allocate entities for each pool
     for i in 0..config.initial_pool_size {
         // Wick pool
-        let wick_entity = commands.spawn((
-            Sprite {
-                color: Color::srgb(0.5, 0.5, 0.5),
-                custom_size: Some(Vec2::new(1.0, 1.0)),
-                ..default()
-            },
-            Transform::from_translation(Vec3::new(-10000.0, -10000.0, 0.0)), // Off-screen
-            Visibility::Hidden,
-            CandlestickWick { candle_index: usize::MAX },
-            PooledEntity {
-                entity_type: PooledEntityType::CandlestickWick,
-                in_use: false,
-            },
-            PriceElement,
-            PaneId::Price,
-        )).id();
-        pools.wicks.entities.push(wick_entity);
-        pools.wicks.available.push(i);
+        let wick_entity = commands
+            .spawn((
+                Sprite {
+                    color: Color::srgb(0.5, 0.5, 0.5),
+                    custom_size: Some(Vec2::new(1.0, 1.0)),
+                    ..default()
+                },
+                Transform::from_translation(Vec3::new(-10000.0, -10000.0, 0.0)), // Off-screen
+                Visibility::Hidden,
+                CandlestickWick {
+                    candle_index: usize::MAX,
+                },
+                PooledEntity {
+                    entity_type: PooledEntityType::CandlestickWick,
+                    in_use: false,
+                },
+                PriceElement,
+                PaneId::Price,
+            ))
+            .id();
+        pools.wicks.add_entity(wick_entity);
 
         // Body pool
-        let body_entity = commands.spawn((
-            Sprite {
-                color: Color::srgb(0.0, 0.8, 0.2),
-                custom_size: Some(Vec2::new(1.0, 1.0)),
-                ..default()
-            },
-            Transform::from_translation(Vec3::new(-10000.0, -10000.0, 1.0)),
-            Visibility::Hidden,
-            CandlestickBody { candle_index: usize::MAX },
-            PooledEntity {
-                entity_type: PooledEntityType::CandlestickBody,
-                in_use: false,
-            },
-            PriceElement,
-            PaneId::Price,
-        )).id();
-        pools.bodies.entities.push(body_entity);
-        pools.bodies.available.push(i);
+        let body_entity = commands
+            .spawn((
+                Sprite {
+                    color: Color::srgb(0.0, 0.8, 0.2),
+                    custom_size: Some(Vec2::new(1.0, 1.0)),
+                    ..default()
+                },
+                Transform::from_translation(Vec3::new(-10000.0, -10000.0, 1.0)),
+                Visibility::Hidden,
+                CandlestickBody {
+                    candle_index: usize::MAX,
+                },
+                PooledEntity {
+                    entity_type: PooledEntityType::CandlestickBody,
+                    in_use: false,
+                },
+                PriceElement,
+                PaneId::Price,
+            ))
+            .id();
+        pools.bodies.add_entity(body_entity);
 
         // OHLC pool
-        let ohlc_entity = commands.spawn((
-            Sprite {
-                color: Color::srgb(0.0, 0.8, 0.2),
-                custom_size: Some(Vec2::new(1.5, 1.0)),
-                ..default()
-            },
-            Transform::from_translation(Vec3::new(-10000.0, -10000.0, 0.0)),
-            Visibility::Hidden,
-            CandlestickOHLCLine { candle_index: usize::MAX },
-            PooledEntity {
-                entity_type: PooledEntityType::CandlestickOHLC,
-                in_use: false,
-            },
-            PriceElement,
-            PaneId::Price,
-        )).id();
-        pools.ohlc_lines.entities.push(ohlc_entity);
-        pools.ohlc_lines.available.push(i);
+        let ohlc_entity = commands
+            .spawn((
+                Sprite {
+                    color: Color::srgb(0.0, 0.8, 0.2),
+                    custom_size: Some(Vec2::new(1.5, 1.0)),
+                    ..default()
+                },
+                Transform::from_translation(Vec3::new(-10000.0, -10000.0, 0.0)),
+                Visibility::Hidden,
+                CandlestickOHLCLine {
+                    candle_index: usize::MAX,
+                },
+                PooledEntity {
+                    entity_type: PooledEntityType::CandlestickOHLC,
+                    in_use: false,
+                },
+                PriceElement,
+                PaneId::Price,
+            ))
+            .id();
+        pools.ohlc_lines.add_entity(ohlc_entity);
 
         // Range pool
-        let range_entity = commands.spawn((
-            Sprite {
-                color: Color::srgb(0.0, 0.8, 0.2),
-                custom_size: Some(Vec2::new(0.5, 1.0)),
-                ..default()
-            },
-            Transform::from_translation(Vec3::new(-10000.0, -10000.0, 0.0)),
-            Visibility::Hidden,
-            CandlestickRangeLine { candle_index: usize::MAX },
-            PooledEntity {
-                entity_type: PooledEntityType::CandlestickRange,
-                in_use: false,
-            },
-            PriceElement,
-            PaneId::Price,
-        )).id();
-        pools.range_lines.entities.push(range_entity);
-        pools.range_lines.available.push(i);
+        let range_entity = commands
+            .spawn((
+                Sprite {
+                    color: Color::srgb(0.0, 0.8, 0.2),
+                    custom_size: Some(Vec2::new(0.5, 1.0)),
+                    ..default()
+                },
+                Transform::from_translation(Vec3::new(-10000.0, -10000.0, 0.0)),
+                Visibility::Hidden,
+                CandlestickRangeLine {
+                    candle_index: usize::MAX,
+                },
+                PooledEntity {
+                    entity_type: PooledEntityType::CandlestickRange,
+                    in_use: false,
+                },
+                PriceElement,
+                PaneId::Price,
+            ))
+            .id();
+        pools.range_lines.add_entity(range_entity);
 
         // Volume bar pool
-        let volume_entity = commands.spawn((
-            Sprite {
-                color: Color::srgba(0.0, 0.8, 0.2, 0.6),
-                custom_size: Some(Vec2::new(1.0, 1.0)),
-                ..default()
-            },
-            Transform::from_translation(Vec3::new(-10000.0, -10000.0, 0.0)),
-            Visibility::Hidden,
-            VolumeBar { candle_index: usize::MAX },
-            PooledEntity {
-                entity_type: PooledEntityType::VolumeBar,
-                in_use: false,
-            },
-            VolumeElement,
-            PaneId::Volume,
-        )).id();
-        pools.volume_bars.entities.push(volume_entity);
-        pools.volume_bars.available.push(i);
+        let volume_entity = commands
+            .spawn((
+                Sprite {
+                    color: Color::srgba(0.0, 0.8, 0.2, 0.6),
+                    custom_size: Some(Vec2::new(1.0, 1.0)),
+                    ..default()
+                },
+                Transform::from_translation(Vec3::new(-10000.0, -10000.0, 0.0)),
+                Visibility::Hidden,
+                VolumeBar {
+                    candle_index: usize::MAX,
+                },
+                PooledEntity {
+                    entity_type: PooledEntityType::VolumeBar,
+                    in_use: false,
+                },
+                VolumeElement,
+                PaneId::Volume,
+            ))
+            .id();
+        pools.volume_bars.add_entity(volume_entity);
     }
 
-    println!("Initialized entity pools: {} entities per type", config.initial_pool_size);
+    println!(
+        "Initialized entity pools: {} entities per type",
+        config.initial_pool_size
+    );
 
     commands.insert_resource(pools);
 }
@@ -610,7 +812,10 @@ fn handle_screenshot(
 
         // Delete temp file
         if let Err(e) = std::fs::remove_file(&temp_path_clone) {
-            eprintln!("Warning: Failed to delete temp screenshot file {}: {}", temp_path_clone, e);
+            eprintln!(
+                "Warning: Failed to delete temp screenshot file {}: {}",
+                temp_path_clone, e
+            );
         }
 
         println!("Screenshot cropped successfully: {}", final_path_clone);
@@ -734,8 +939,10 @@ fn handle_timeframe_keyboard(
                 ticker_id,
             });
         } else {
-            println!("Already at largest available timeframe: {} (available: {:?})",
-                current, timeframe_mgr.available_timeframes);
+            println!(
+                "Already at largest available timeframe: {} (available: {:?})",
+                current, timeframe_mgr.available_timeframes
+            );
         }
     } else if keys.just_pressed(KeyCode::ArrowLeft) {
         // Ctrl+Left: previous smaller timeframe
@@ -747,8 +954,10 @@ fn handle_timeframe_keyboard(
                 ticker_id,
             });
         } else {
-            println!("Already at smallest available timeframe: {} (available: {:?})",
-                current, timeframe_mgr.available_timeframes);
+            println!(
+                "Already at smallest available timeframe: {} (available: {:?})",
+                current, timeframe_mgr.available_timeframes
+            );
         }
     }
 }
@@ -762,7 +971,10 @@ fn handle_timeframe_change(
     args: Res<ChartArgs>,
 ) {
     for event in change_events.read() {
-        println!("Processing timeframe change: {} -> {}", event.from, event.to);
+        println!(
+            "Processing timeframe change: {} -> {}",
+            event.from, event.to
+        );
 
         // Load new data from database
         let start_time = parse_date_to_timestamp(&args.start).unwrap_or(0);
@@ -777,7 +989,11 @@ fn handle_timeframe_change(
                     continue;
                 }
 
-                println!("Loaded {} candles for timeframe: {}", candles.len(), event.to);
+                println!(
+                    "Loaded {} candles for timeframe: {}",
+                    candles.len(),
+                    event.to
+                );
 
                 // Update chart with new data
                 chart.candles = candles.clone();

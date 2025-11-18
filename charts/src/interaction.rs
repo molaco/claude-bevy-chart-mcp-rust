@@ -1,8 +1,8 @@
-use bevy::prelude::*;
-use bevy::input::mouse::MouseWheel;
-use bevy::window::{CursorIcon, SystemCursorIcon};
 use crate::focus::{FocusState, FocusTarget};
 use crate::types::*;
+use bevy::input::mouse::MouseWheel;
+use bevy::prelude::*;
+use bevy::window::{CursorIcon, SystemCursorIcon};
 
 // ============================================================================
 // INTERACTION SYSTEMS
@@ -33,7 +33,7 @@ pub fn handle_mouse_input(
         let window_size = Vec2::new(window.width(), window.height());
         interaction.mouse_pos = Vec2::new(
             cursor_pos.x - window_size.x / 2.0,
-            window_size.y / 2.0 - cursor_pos.y,  // Flip Y axis
+            window_size.y / 2.0 - cursor_pos.y, // Flip Y axis
         );
     }
 
@@ -65,9 +65,8 @@ pub fn handle_mouse_input(
             // Start resize
             interaction.resizing_gap = Some(gap_idx);
             interaction.drag_start_pos = interaction.mouse_pos;
-            interaction.resize_start_heights = chart.panes.iter()
-                .map(|p| p.height_percent)
-                .collect();
+            interaction.resize_start_heights =
+                chart.panes.iter().map(|p| p.height_percent).collect();
         }
     }
 
@@ -121,7 +120,9 @@ pub fn handle_mouse_input(
     }
 
     // Check if mouse is in any pane
-    let mouse_in_pane = chart.panes.iter()
+    let mouse_in_pane = chart
+        .panes
+        .iter()
         .any(|pane| pane.space.viewport.contains(interaction.mouse_pos));
 
     // Pan: Left mouse button drag
@@ -145,9 +146,8 @@ pub fn handle_mouse_input(
             // Update shared X-axis state
             let new_start = (chart.visible_candle_start as i32 + candles_moved).max(0) as usize;
             let spacing = right_spacing_candles(chart.visible_candle_count);
-            chart.visible_candle_start = new_start.min(
-                (chart.candles.len() + spacing).saturating_sub(chart.visible_candle_count)
-            );
+            chart.visible_candle_start = new_start
+                .min((chart.candles.len() + spacing).saturating_sub(chart.visible_candle_count));
 
             // Update Y-axis bounds for all panes
             update_pane_bounds(&mut chart);
@@ -166,7 +166,7 @@ pub fn handle_mouse_input(
             let (focus_candle, _) = chart.panes[0].space.from_world(
                 interaction.mouse_pos,
                 chart.visible_candle_start,
-                chart.visible_candle_count
+                chart.visible_candle_count,
             );
 
             // Update shared X-axis state (zoom)
@@ -190,19 +190,15 @@ pub fn handle_mouse_input(
 
             println!(
                 "Zoomed: showing {} candles starting from {}",
-                chart.visible_candle_count,
-                chart.visible_candle_start
+                chart.visible_candle_count, chart.visible_candle_start
             );
         }
     }
 }
 
-pub fn check_lazy_load(
-    mut chart: ResMut<Chart>,
-    db: Res<ChartDatabase>,
-) {
+pub fn check_lazy_load(mut chart: ResMut<Chart>, db: Res<ChartDatabase>) {
     if chart.loading {
-        return;  // Already loading
+        return; // Already loading
     }
 
     let start_idx = chart.visible_candle_start;
@@ -244,7 +240,10 @@ pub fn check_lazy_load(
                 chart.visible_candle_start += new_len;
 
                 // INCREMENTAL: Only calculate MA for NEW candles
-                println!("Recalculating indicators for {} new candles (prepend)", new_len);
+                println!(
+                    "Recalculating indicators for {} new candles (prepend)",
+                    new_len
+                );
 
                 // Split borrow: borrow candles and indicators separately
                 let candles_ptr = chart.candles.as_slice() as *const [Candle];
@@ -345,14 +344,18 @@ pub fn toggle_volume_pane(
                 let volume_pane = Pane::new(
                     PaneId::Volume,
                     PaneType::Volume,
-                    0.3,  // 30% height
+                    0.3, // 30% height
                     Rect::default(),
                     chart.visible_candle_count,
                 );
                 chart.panes.push(volume_pane);
 
                 // Adjust price pane height to 70%
-                if let Some(price_pane) = chart.panes.iter_mut().find(|p| matches!(p.id, PaneId::Price)) {
+                if let Some(price_pane) = chart
+                    .panes
+                    .iter_mut()
+                    .find(|p| matches!(p.id, PaneId::Price))
+                {
                     price_pane.height_percent = 0.7;
                 }
 
@@ -363,7 +366,11 @@ pub fn toggle_volume_pane(
             chart.panes.retain(|p| !matches!(p.id, PaneId::Volume));
 
             // Give price pane 100% height
-            if let Some(price_pane) = chart.panes.iter_mut().find(|p| matches!(p.id, PaneId::Price)) {
+            if let Some(price_pane) = chart
+                .panes
+                .iter_mut()
+                .find(|p| matches!(p.id, PaneId::Price))
+            {
                 price_pane.height_percent = 1.0;
             }
 
@@ -402,7 +409,11 @@ pub fn toggle_sma_indicators(
         // Toggle SMA-20 (first indicator)
         if let Some(sma) = chart.indicators.get_mut(0) {
             sma.visible = !sma.visible;
-            println!("SMA-{} {}", sma.period, if sma.visible { "shown" } else { "hidden" });
+            println!(
+                "SMA-{} {}",
+                sma.period,
+                if sma.visible { "shown" } else { "hidden" }
+            );
             toggled = true;
         }
     }
@@ -411,7 +422,11 @@ pub fn toggle_sma_indicators(
         // Toggle SMA-50 (second indicator)
         if let Some(sma) = chart.indicators.get_mut(1) {
             sma.visible = !sma.visible;
-            println!("SMA-{} {}", sma.period, if sma.visible { "shown" } else { "hidden" });
+            println!(
+                "SMA-{} {}",
+                sma.period,
+                if sma.visible { "shown" } else { "hidden" }
+            );
             toggled = true;
         }
     }
@@ -420,7 +435,11 @@ pub fn toggle_sma_indicators(
         // Toggle SMA-200 (third indicator)
         if let Some(sma) = chart.indicators.get_mut(2) {
             sma.visible = !sma.visible;
-            println!("SMA-{} {}", sma.period, if sma.visible { "shown" } else { "hidden" });
+            println!(
+                "SMA-{} {}",
+                sma.period,
+                if sma.visible { "shown" } else { "hidden" }
+            );
             toggled = true;
         }
     }

@@ -1,5 +1,5 @@
-use bevy::prelude::*;
 use bevy::input_focus::InputFocus;
+use bevy::prelude::*;
 use chat_ui::prelude::ChatInputField;
 
 // ============================================================================
@@ -40,10 +40,7 @@ pub struct ChatFocusIndicator;
 // ============================================================================
 
 /// System to handle Tab key for focus switching
-pub fn handle_focus_tab(
-    keys: Res<ButtonInput<KeyCode>>,
-    mut focus: ResMut<FocusState>,
-) {
+pub fn handle_focus_tab(keys: Res<ButtonInput<KeyCode>>, mut focus: ResMut<FocusState>) {
     if keys.just_pressed(KeyCode::Tab) {
         focus.current = match focus.current {
             FocusTarget::Chart => FocusTarget::Chat,
@@ -85,8 +82,14 @@ pub fn handle_focus_click(
 /// System to update focus indicator visibility
 pub fn update_focus_indicators(
     focus: Res<FocusState>,
-    mut chart_indicator_query: Query<&mut Node, (With<ChartFocusIndicator>, Without<ChatFocusIndicator>)>,
-    mut chat_indicator_query: Query<&mut Node, (With<ChatFocusIndicator>, Without<ChartFocusIndicator>)>,
+    mut chart_indicator_query: Query<
+        &mut Node,
+        (With<ChartFocusIndicator>, Without<ChatFocusIndicator>),
+    >,
+    mut chat_indicator_query: Query<
+        &mut Node,
+        (With<ChatFocusIndicator>, Without<ChartFocusIndicator>),
+    >,
 ) {
     // Only update if focus state changed
     if !focus.is_changed() {
