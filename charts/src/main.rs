@@ -1,3 +1,4 @@
+mod aggregation;
 mod focus;
 mod interaction;
 mod rendering;
@@ -343,6 +344,7 @@ fn main() {
         .add_systems(Startup, ui_layout::setup_split_layout)
         .add_systems(Startup, setup)
         .add_systems(Startup, init_entity_pools.after(setup))
+        .add_systems(Startup, warmup_aggregation_cache.after(setup))
         .add_systems(Startup, setup_fps_counter)
         .add_systems(Startup, setup_timeframe_label)
         .add_systems(PostStartup, ui_layout::reparent_chat_to_container)
@@ -365,6 +367,7 @@ fn main() {
         .add_systems(Update, update_timeframe_label)
         .add_systems(Update, handle_timeframe_keyboard)
         .add_systems(Update, handle_timeframe_change)
+        .add_systems(Update, handle_timeframe_change_aggregation)
         .add_systems(
             Update,
             cleanup_entity_pools.run_if(on_timer(Duration::from_secs(10))),
@@ -425,6 +428,50 @@ fn validate_cli_args(args: &ChartArgs) -> Result<()> {
 // ============================================================================
 // SETUP
 // ============================================================================
+
+/// Warm up aggregation cache with common levels for faster initial rendering
+fn warmup_aggregation_cache(
+    chart: Res<Chart>,
+    config: Res<aggregation::AggregationConfig>,
+    mut cache: ResMut<aggregation::AggregationCache>,
+) {
+    if !config.enabled || !config.warmup_on_startup {
+        return;
+    }
+
+    let start = std::time::Instant::now();
+
+    let timeframe = &chart.timeframe;
+    let candles = &chart.candles;
+    let visible_count = chart.visible_candle_count;
+
+    // Warm up common levels
+    let levels = [
+        aggregation::AggregationLevel::None,
+        aggregation::AggregationLevel::Low,
+        aggregation::AggregationLevel::Medium,
+        aggregation::AggregationLevel::High,
+    ];
+
+    for level in levels {
+        cache.get_or_aggregate(
+            timeframe,
+            candles,
+            0,
+            visible_count,
+            level,
+        );
+    }
+
+    let elapsed = start.elapsed();
+    let stats = cache.stats();
+    println!(
+        "Cache warmed: {} entries, {:.2}MB, took {:?}",
+        stats.entries,
+        stats.size_bytes as f64 / 1_048_576.0,
+        elapsed
+    );
+}
 
 fn setup(
     mut commands: Commands,
@@ -586,6 +633,13 @@ fn setup(
     commands.insert_resource(Crosshair::default());
     commands.insert_resource(VolumeToggleState::default());
     commands.insert_resource(ScreenshotCounter::default());
+
+    // Aggregation system resources
+    let agg_config = aggregation::AggregationConfig::default();
+    let cache_size_bytes = agg_config.cache_size_mb * 1024 * 1024;
+    commands.insert_resource(agg_config);
+    commands.insert_resource(aggregation::AggregationCache::new(cache_size_bytes));
+    commands.insert_resource(aggregation::AggregationState::default());
     commands.insert_resource(CandlestickLODConfig::default());
 
     println!("Setup complete! Press 'V' to toggle volume pane, 'F' to take screenshot.");
@@ -1049,5 +1103,21 @@ fn handle_timeframe_change(
                 eprintln!("Failed to load timeframe {}: {}", event.to, e);
             }
         }
+    }
+}
+
+/// Handle aggregation cache clearing on timeframe changes
+fn handle_timeframe_change_aggregation(
+    mut change_events: MessageReader<TimeframeChangeRequest>,
+    mut cache: ResMut<aggregation::AggregationCache>,
+    mut state: ResMut<aggregation::AggregationState>,
+) {
+    for event in change_events.read() {
+        println!("Clearing aggregation cache for old timeframe: {}", event.from);
+        cache.clear_timeframe(&event.from);
+
+        // Reset aggregation state
+        state.current_level = aggregation::AggregationLevel::None;
+        state.level_change_cooldown = None;
     }
 }

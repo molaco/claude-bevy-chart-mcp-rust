@@ -1,4 +1,5 @@
 use crate::types::*;
+use crate::aggregation::*;
 use bevy::prelude::*;
 use bevy::sprite::Anchor;
 use bevy::window::CursorOptions;
@@ -29,6 +30,9 @@ pub fn render_candlesticks(
     mut commands: Commands,
     chart: Res<Chart>,
     config: Res<CandlestickLODConfig>,
+    agg_config: Res<AggregationConfig>,
+    mut agg_cache: ResMut<AggregationCache>,
+    mut agg_state: ResMut<AggregationState>,
     mut pools: ResMut<EntityPools>,
     mut query_wicks: Query<
         (
@@ -108,6 +112,43 @@ pub fn render_candlesticks(
         return;
     }
 
+    // Determine if aggregation is needed
+    let level = if agg_config.enabled {
+        agg_state.get_stable_level(
+            chart.visible_candle_count,
+            agg_config.max_renderable_candles,
+        )
+    } else {
+        AggregationLevel::None
+    };
+
+    // Get aggregated data if needed (must live for entire function)
+    let aggregated_data;
+    let (candles_to_render, index_mapping_offset) = if level != AggregationLevel::None {
+        aggregated_data = agg_cache.get_or_aggregate(
+            &chart.timeframe,
+            &chart.candles,
+            start,
+            chart.visible_candle_count,
+            level,
+        );
+
+        #[cfg(debug_assertions)]
+        println!(
+            "Aggregation: {:?} ({}:1) - {} -> {} candles",
+            level,
+            level.ratio(),
+            chart.visible_candle_count,
+            aggregated_data.candles.len()
+        );
+
+        // Return aggregated candles with offset 0
+        (aggregated_data.candles.as_slice(), 0_usize)
+    } else {
+        // No aggregation needed
+        (&chart.candles[start..end], start)
+    };
+
     // Determine LOD level based on candle width
     let candle_width_px = price_pane.space.candle_width_px;
     let lod_level = calculate_lod_level(candle_width_px, &config);
@@ -142,8 +183,8 @@ pub fn render_candlesticks(
     let mut spawned_count = 0;
 
     // Process each visible candle based on LOD level
-    for i in start..end {
-        let candle = &chart.candles[i];
+    for (idx, candle) in candles_to_render.iter().enumerate() {
+        let i = index_mapping_offset + idx;  // For world space calculations
 
         match lod_level {
             CandleLODLevel::Full => {
@@ -603,48 +644,25 @@ pub fn render_candlesticks(
 
     #[cfg(debug_assertions)]
     {
-        let total_entities =
-            updated_wicks.len() + updated_bodies.len() + updated_ohlc.len() + updated_range.len();
+        let level = agg_state.current_level;
+        let stats = agg_cache.stats();
         let (wick_total, wick_avail) = pools.wicks.stats();
         let (body_total, body_avail) = pools.bodies.stats();
-        let (ohlc_total, ohlc_avail) = pools.ohlc_lines.stats();
-        let (range_total, range_avail) = pools.range_lines.stats();
-        println!(
-            "LOD: {:?} | Candle width: {:.2}px | Rendered {} candles ({}-{}) | Total entities: {} | Spawned: {} | Hidden: {}",
-            lod_level,
-            candle_width_px,
-            end - start,
-            start,
-            end - 1,
-            total_entities,
-            spawned_count,
-            hidden_count
-        );
-        println!(
-            "Pool stats - Wicks: {}/{} | Bodies: {}/{} | OHLC: {}/{} | Range: {}/{}",
-            wick_avail,
-            wick_total,
-            body_avail,
-            body_total,
-            ohlc_avail,
-            ohlc_total,
-            range_avail,
-            range_total
-        );
 
-        // Warn if pools are getting depleted
-        if wick_avail < wick_total / 10 {
-            eprintln!("WARNING: Wick pool low: {}/{}", wick_avail, wick_total);
-        }
-        if body_avail < body_total / 10 {
-            eprintln!("WARNING: Body pool low: {}/{}", body_avail, body_total);
-        }
-        if ohlc_avail < ohlc_total / 10 {
-            eprintln!("WARNING: OHLC pool low: {}/{}", ohlc_avail, ohlc_total);
-        }
-        if range_avail < range_total / 10 {
-            eprintln!("WARNING: Range pool low: {}/{}", range_avail, range_total);
-        }
+        println!(
+            "AGG: {:?} ({}:1) | Rendered: {}/{} | Cache: {:.1}% hit ({}/{}) | Pools: W:{}/{} B:{}/{}",
+            level,
+            level.ratio(),
+            candles_to_render.len(),
+            chart.visible_candle_count,
+            stats.hit_rate() * 100.0,
+            stats.hits,
+            stats.hits + stats.misses,
+            wick_total - wick_avail,
+            wick_total,
+            body_total - body_avail,
+            body_total,
+        );
     }
 }
 
@@ -652,6 +670,9 @@ pub fn render_volume_bars(
     mut commands: Commands,
     chart: Res<Chart>,
     config: Res<CandlestickLODConfig>,
+    agg_config: Res<AggregationConfig>,
+    mut agg_cache: ResMut<AggregationCache>,
+    mut agg_state: ResMut<AggregationState>,
     mut pools: ResMut<EntityPools>,
     mut query: Query<(
         Entity,
@@ -703,6 +724,34 @@ pub fn render_volume_bars(
         return;
     }
 
+    // Determine if aggregation is needed
+    let level = if agg_config.enabled {
+        agg_state.get_stable_level(
+            chart.visible_candle_count,
+            agg_config.max_renderable_candles,
+        )
+    } else {
+        AggregationLevel::None
+    };
+
+    // Get aggregated data if needed (must live for entire function)
+    let aggregated_data;
+    let (candles_to_render, index_mapping_offset) = if level != AggregationLevel::None {
+        aggregated_data = agg_cache.get_or_aggregate(
+            &chart.timeframe,
+            &chart.candles,
+            start,
+            chart.visible_candle_count,
+            level,
+        );
+
+        // Return aggregated candles with offset 0
+        (aggregated_data.candles.as_slice(), 0_usize)
+    } else {
+        // No aggregation needed
+        (&chart.candles[start..end], start)
+    };
+
     // Collect existing entities by candle_index
     use std::collections::{HashMap, HashSet};
     let mut existing_bars: HashMap<usize, Entity> = HashMap::new();
@@ -716,8 +765,8 @@ pub fn render_volume_bars(
     let mut spawned_count = 0;
 
     // Process each visible candle
-    for i in start..end {
-        let candle = &chart.candles[i];
+    for (idx, candle) in candles_to_render.iter().enumerate() {
+        let i = index_mapping_offset + idx;  // For world space calculations
 
         // Calculate bottom (0) and top (volume) positions
         let bar_bottom = volume_pane.space.to_world(
