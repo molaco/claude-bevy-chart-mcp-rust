@@ -751,6 +751,14 @@ pub fn render_volume_bars(
         (&chart.candles[start..end], start)
     };
 
+    // Calculate max volume from aggregated data for proper Y-scaling
+    let max_aggregated_volume = candles_to_render
+        .iter()
+        .map(|c| c.volume as f32)
+        .fold(0.0f32, f32::max) * 1.12; // 12% padding
+
+    let volume_pane = chart.panes.iter().find(|p| matches!(p.id, PaneId::Volume)).unwrap();
+
     // Check if candles are too small to render volume bars
     // Use aggregated candle count for width calculation if aggregation is active
     let effective_candle_count = if level != AggregationLevel::None {
@@ -793,18 +801,26 @@ pub fn render_volume_bars(
             index_mapping_offset + idx
         };
 
-        // Calculate bottom (0) and top (volume) positions
-        let bar_bottom = volume_pane.space.to_world(
-            i,
-            0.0,
-            chart.visible_candle_start,
-            chart.visible_candle_count,
+        // Calculate positions using custom Y-scale for aggregated volumes
+        let candle_offset = i.saturating_sub(start);
+        let x_percent = candle_offset as f32 / chart.visible_candle_count as f32;
+        let world_x = volume_pane.space.viewport.min.x + x_percent * volume_pane.space.viewport.width();
+
+        // Use our calculated max_aggregated_volume instead of pane's bounds
+        let y_percent_bottom = 0.0;
+        let y_percent_top = if max_aggregated_volume > 0.0 {
+            (candle.volume as f32) / max_aggregated_volume
+        } else {
+            0.0
+        };
+
+        let bar_bottom = Vec2::new(
+            world_x,
+            volume_pane.space.viewport.min.y + y_percent_bottom * volume_pane.space.viewport.height(),
         );
-        let bar_top = volume_pane.space.to_world(
-            i,
-            candle.volume as f32,
-            chart.visible_candle_start,
-            chart.visible_candle_count,
+        let bar_top = Vec2::new(
+            world_x,
+            volume_pane.space.viewport.min.y + y_percent_top * volume_pane.space.viewport.height(),
         );
 
         let bar_center = Vec2::new(
