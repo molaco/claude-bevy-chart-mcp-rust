@@ -178,9 +178,11 @@ fn main() {
         .add_plugins(RemoteHttpPlugin::default()) // Enable HTTP transport on port 15702
         .insert_resource(args) // Inject CLI args as a resource
         .init_resource::<FocusState>()
+        .insert_resource(EntityPoolConfig::default())
         .add_message::<TimeframeChangeRequest>()
         .add_systems(Startup, ui_layout::setup_split_layout)
         .add_systems(Startup, setup)
+        .add_systems(Startup, init_entity_pools.after(setup))
         .add_systems(Startup, setup_fps_counter)
         .add_systems(Startup, setup_timeframe_label)
         .add_systems(PostStartup, ui_layout::reparent_chat_to_container)
@@ -401,6 +403,126 @@ fn setup(
 
     println!("Setup complete! Press 'V' to toggle volume pane, 'F' to take screenshot.");
     println!("Press Ctrl+Left/Right to switch between timeframes.");
+}
+
+/// Initialize entity pools at startup
+fn init_entity_pools(
+    mut commands: Commands,
+    config: Res<EntityPoolConfig>,
+) {
+    if !config.enabled {
+        commands.insert_resource(EntityPools::new());
+        return;
+    }
+
+    let mut pools = EntityPools::new();
+
+    // Pre-allocate entities for each pool
+    for i in 0..config.initial_pool_size {
+        // Wick pool
+        let wick_entity = commands.spawn((
+            Sprite {
+                color: Color::srgb(0.5, 0.5, 0.5),
+                custom_size: Some(Vec2::new(1.0, 1.0)),
+                ..default()
+            },
+            Transform::from_translation(Vec3::new(-10000.0, -10000.0, 0.0)), // Off-screen
+            Visibility::Hidden,
+            CandlestickWick { candle_index: usize::MAX },
+            PooledEntity {
+                entity_type: PooledEntityType::CandlestickWick,
+                in_use: false,
+            },
+            PriceElement,
+            PaneId::Price,
+        )).id();
+        pools.wicks.entities.push(wick_entity);
+        pools.wicks.available.push(i);
+
+        // Body pool
+        let body_entity = commands.spawn((
+            Sprite {
+                color: Color::srgb(0.0, 0.8, 0.2),
+                custom_size: Some(Vec2::new(1.0, 1.0)),
+                ..default()
+            },
+            Transform::from_translation(Vec3::new(-10000.0, -10000.0, 1.0)),
+            Visibility::Hidden,
+            CandlestickBody { candle_index: usize::MAX },
+            PooledEntity {
+                entity_type: PooledEntityType::CandlestickBody,
+                in_use: false,
+            },
+            PriceElement,
+            PaneId::Price,
+        )).id();
+        pools.bodies.entities.push(body_entity);
+        pools.bodies.available.push(i);
+
+        // OHLC pool
+        let ohlc_entity = commands.spawn((
+            Sprite {
+                color: Color::srgb(0.0, 0.8, 0.2),
+                custom_size: Some(Vec2::new(1.5, 1.0)),
+                ..default()
+            },
+            Transform::from_translation(Vec3::new(-10000.0, -10000.0, 0.0)),
+            Visibility::Hidden,
+            CandlestickOHLCLine { candle_index: usize::MAX },
+            PooledEntity {
+                entity_type: PooledEntityType::CandlestickOHLC,
+                in_use: false,
+            },
+            PriceElement,
+            PaneId::Price,
+        )).id();
+        pools.ohlc_lines.entities.push(ohlc_entity);
+        pools.ohlc_lines.available.push(i);
+
+        // Range pool
+        let range_entity = commands.spawn((
+            Sprite {
+                color: Color::srgb(0.0, 0.8, 0.2),
+                custom_size: Some(Vec2::new(0.5, 1.0)),
+                ..default()
+            },
+            Transform::from_translation(Vec3::new(-10000.0, -10000.0, 0.0)),
+            Visibility::Hidden,
+            CandlestickRangeLine { candle_index: usize::MAX },
+            PooledEntity {
+                entity_type: PooledEntityType::CandlestickRange,
+                in_use: false,
+            },
+            PriceElement,
+            PaneId::Price,
+        )).id();
+        pools.range_lines.entities.push(range_entity);
+        pools.range_lines.available.push(i);
+
+        // Volume bar pool
+        let volume_entity = commands.spawn((
+            Sprite {
+                color: Color::srgba(0.0, 0.8, 0.2, 0.6),
+                custom_size: Some(Vec2::new(1.0, 1.0)),
+                ..default()
+            },
+            Transform::from_translation(Vec3::new(-10000.0, -10000.0, 0.0)),
+            Visibility::Hidden,
+            VolumeBar { candle_index: usize::MAX },
+            PooledEntity {
+                entity_type: PooledEntityType::VolumeBar,
+                in_use: false,
+            },
+            VolumeElement,
+            PaneId::Volume,
+        )).id();
+        pools.volume_bars.entities.push(volume_entity);
+        pools.volume_bars.available.push(i);
+    }
+
+    println!("Initialized entity pools: {} entities per type", config.initial_pool_size);
+
+    commands.insert_resource(pools);
 }
 
 // ============================================================================

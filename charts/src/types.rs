@@ -940,6 +940,99 @@ pub fn calculate_lod_level(candle_width_px: f32, config: &CandlestickLODConfig) 
 }
 
 // ============================================================================
+// ENTITY POOLING SYSTEM
+// ============================================================================
+
+/// Marker component for pooled entities
+#[derive(Component)]
+pub struct PooledEntity {
+    pub entity_type: PooledEntityType,
+    pub in_use: bool,
+}
+
+/// Types of pooled entities
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PooledEntityType {
+    CandlestickWick,
+    CandlestickBody,
+    CandlestickOHLC,
+    CandlestickRange,
+    VolumeBar,
+}
+
+/// Entity pool for a specific entity type
+pub struct EntityPool {
+    pub entities: Vec<Entity>,
+    pub available: Vec<usize>, // Indices of available entities
+}
+
+impl EntityPool {
+    pub fn new() -> Self {
+        Self {
+            entities: Vec::new(),
+            available: Vec::new(),
+        }
+    }
+
+    /// Get an available entity or None if pool exhausted
+    pub fn get(&mut self) -> Option<Entity> {
+        self.available.pop().map(|idx| self.entities[idx])
+    }
+
+    /// Return an entity to the pool
+    pub fn return_entity(&mut self, entity: Entity) {
+        if let Some(idx) = self.entities.iter().position(|&e| e == entity) {
+            if !self.available.contains(&idx) {
+                self.available.push(idx);
+            }
+        }
+    }
+
+    /// Get pool utilization stats
+    pub fn stats(&self) -> (usize, usize) {
+        (self.entities.len(), self.available.len())
+    }
+}
+
+/// Resource managing all entity pools
+#[derive(Resource)]
+pub struct EntityPools {
+    pub wicks: EntityPool,
+    pub bodies: EntityPool,
+    pub ohlc_lines: EntityPool,
+    pub range_lines: EntityPool,
+    pub volume_bars: EntityPool,
+}
+
+impl EntityPools {
+    pub fn new() -> Self {
+        Self {
+            wicks: EntityPool::new(),
+            bodies: EntityPool::new(),
+            ohlc_lines: EntityPool::new(),
+            range_lines: EntityPool::new(),
+            volume_bars: EntityPool::new(),
+        }
+    }
+}
+
+/// Configuration for entity pooling
+#[derive(Resource, Clone)]
+pub struct EntityPoolConfig {
+    pub initial_pool_size: usize,
+    pub enabled: bool,
+}
+
+impl Default for EntityPoolConfig {
+    fn default() -> Self {
+        Self {
+            initial_pool_size: 1000,
+            enabled: true,
+        }
+    }
+}
+
+// ============================================================================
 // TIMEFRAME MANAGEMENT
 // ============================================================================
 

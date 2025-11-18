@@ -29,22 +29,24 @@ pub fn render_candlesticks(
     mut commands: Commands,
     chart: Res<Chart>,
     config: Res<CandlestickLODConfig>,
+    mut pools: ResMut<EntityPools>,
     mut query_wicks: Query<
-        (Entity, &CandlestickWick, &mut Transform, &mut Sprite),
+        (Entity, &mut CandlestickWick, &mut Transform, &mut Sprite, &mut Visibility),
         (Without<CandlestickBody>, Without<CandlestickOHLCLine>, Without<CandlestickRangeLine>)
     >,
     mut query_bodies: Query<
-        (Entity, &CandlestickBody, &mut Transform, &mut Sprite),
+        (Entity, &mut CandlestickBody, &mut Transform, &mut Sprite, &mut Visibility),
         (Without<CandlestickWick>, Without<CandlestickOHLCLine>, Without<CandlestickRangeLine>)
     >,
     mut query_ohlc: Query<
-        (Entity, &CandlestickOHLCLine, &mut Transform, &mut Sprite),
+        (Entity, &mut CandlestickOHLCLine, &mut Transform, &mut Sprite, &mut Visibility),
         (Without<CandlestickWick>, Without<CandlestickBody>, Without<CandlestickRangeLine>)
     >,
     mut query_range: Query<
-        (Entity, &CandlestickRangeLine, &mut Transform, &mut Sprite),
+        (Entity, &mut CandlestickRangeLine, &mut Transform, &mut Sprite, &mut Visibility),
         (Without<CandlestickWick>, Without<CandlestickBody>, Without<CandlestickOHLCLine>)
     >,
+    mut pooled_query: Query<&mut PooledEntity>,
 ) {
     if !chart.needs_redraw {
         return;
@@ -78,16 +80,16 @@ pub fn render_candlesticks(
     let mut existing_ohlc: HashMap<usize, Entity> = HashMap::new();
     let mut existing_range: HashMap<usize, Entity> = HashMap::new();
 
-    for (entity, wick, _, _) in query_wicks.iter() {
+    for (entity, wick, _, _, _) in query_wicks.iter() {
         existing_wicks.insert(wick.candle_index, entity);
     }
-    for (entity, body, _, _) in query_bodies.iter() {
+    for (entity, body, _, _, _) in query_bodies.iter() {
         existing_bodies.insert(body.candle_index, entity);
     }
-    for (entity, ohlc, _, _) in query_ohlc.iter() {
+    for (entity, ohlc, _, _, _) in query_ohlc.iter() {
         existing_ohlc.insert(ohlc.candle_index, entity);
     }
-    for (entity, range_line, _, _) in query_range.iter() {
+    for (entity, range_line, _, _, _) in query_range.iter() {
         existing_range.insert(range_line.candle_index, entity);
     }
 
@@ -106,12 +108,24 @@ pub fn render_candlesticks(
 
         match lod_level {
             CandleLODLevel::Full => {
-                // Full detail: render wick + body (despawn LOD entities if they exist)
+                // Full detail: render wick + body (hide LOD entities if they exist)
                 if let Some(&entity) = existing_ohlc.get(&i) {
-                    commands.entity(entity).despawn();
+                    if let Ok((_, _, _, _, mut visibility)) = query_ohlc.get_mut(entity) {
+                        *visibility = Visibility::Hidden;
+                    }
+                    pools.ohlc_lines.return_entity(entity);
+                    if let Ok(mut pooled) = pooled_query.get_mut(entity) {
+                        pooled.in_use = false;
+                    }
                 }
                 if let Some(&entity) = existing_range.get(&i) {
-                    commands.entity(entity).despawn();
+                    if let Ok((_, _, _, _, mut visibility)) = query_range.get_mut(entity) {
+                        *visibility = Visibility::Hidden;
+                    }
+                    pools.range_lines.return_entity(entity);
+                    if let Ok(mut pooled) = pooled_query.get_mut(entity) {
+                        pooled.in_use = false;
+                    }
                 }
 
                 // Calculate positions using ChartSpace::to_world()
@@ -138,17 +152,33 @@ pub fn render_candlesticks(
                 );
                 let wick_height = (wick_top.y - wick_bottom.y).abs().max(1.0);
 
-                // UPDATE or SPAWN wick entity
+                // UPDATE or GET FROM POOL wick entity
                 if let Some(&entity) = existing_wicks.get(&i) {
-                    if let Ok((_, _, mut transform, mut sprite)) = query_wicks.get_mut(entity) {
+                    if let Ok((_, _, mut transform, mut sprite, mut visibility)) = query_wicks.get_mut(entity) {
                         transform.translation = wick_center.extend(0.0);
                         if let Some(ref mut size) = sprite.custom_size {
                             *size = Vec2::new(1.0, wick_height);
                         }
+                        *visibility = Visibility::Visible;
                     }
                     updated_wicks.insert(i);
+                } else if let Some(entity) = pools.wicks.get() {
+                    // Reuse from pool
+                    if let Ok((_, mut wick, mut transform, mut sprite, mut visibility)) = query_wicks.get_mut(entity) {
+                        wick.candle_index = i;
+                        transform.translation = wick_center.extend(0.0);
+                        if let Some(ref mut size) = sprite.custom_size {
+                            *size = Vec2::new(1.0, wick_height);
+                        }
+                        *visibility = Visibility::Visible;
+                        if let Ok(mut pooled) = pooled_query.get_mut(entity) {
+                            pooled.in_use = true;
+                        }
+                        updated_wicks.insert(i);
+                    }
                 } else {
-                    commands.spawn((
+                    // Pool exhausted - spawn new
+                    let new_entity = commands.spawn((
                         Sprite {
                             color: Color::srgb(0.5, 0.5, 0.5),
                             custom_size: Some(Vec2::new(1.0, wick_height)),
@@ -156,9 +186,14 @@ pub fn render_candlesticks(
                         },
                         Transform::from_translation(wick_center.extend(0.0)),
                         CandlestickWick { candle_index: i },
+                        PooledEntity {
+                            entity_type: PooledEntityType::CandlestickWick,
+                            in_use: true,
+                        },
                         PriceElement,
                         PaneId::Price,
-                    ));
+                    )).id();
+                    pools.wicks.entities.push(new_entity);
                     spawned_count += 1;
                 }
 
@@ -176,18 +211,35 @@ pub fn render_candlesticks(
                     Color::srgb(0.9, 0.2, 0.2)  // Red
                 };
 
-                // UPDATE or SPAWN body entity
+                // UPDATE or GET FROM POOL body entity
                 if let Some(&entity) = existing_bodies.get(&i) {
-                    if let Ok((_, _, mut transform, mut sprite)) = query_bodies.get_mut(entity) {
+                    if let Ok((_, _, mut transform, mut sprite, mut visibility)) = query_bodies.get_mut(entity) {
                         transform.translation = body_center.extend(1.0);
                         sprite.color = body_color;
                         if let Some(ref mut size) = sprite.custom_size {
                             *size = Vec2::new(body_width, body_height);
                         }
+                        *visibility = Visibility::Visible;
                     }
                     updated_bodies.insert(i);
+                } else if let Some(entity) = pools.bodies.get() {
+                    // Reuse from pool
+                    if let Ok((_, mut body, mut transform, mut sprite, mut visibility)) = query_bodies.get_mut(entity) {
+                        body.candle_index = i;
+                        transform.translation = body_center.extend(1.0);
+                        sprite.color = body_color;
+                        if let Some(ref mut size) = sprite.custom_size {
+                            *size = Vec2::new(body_width, body_height);
+                        }
+                        *visibility = Visibility::Visible;
+                        if let Ok(mut pooled) = pooled_query.get_mut(entity) {
+                            pooled.in_use = true;
+                        }
+                        updated_bodies.insert(i);
+                    }
                 } else {
-                    commands.spawn((
+                    // Pool exhausted - spawn new
+                    let new_entity = commands.spawn((
                         Sprite {
                             color: body_color,
                             custom_size: Some(Vec2::new(body_width, body_height)),
@@ -195,23 +247,46 @@ pub fn render_candlesticks(
                         },
                         Transform::from_translation(body_center.extend(1.0)),
                         CandlestickBody { candle_index: i },
+                        PooledEntity {
+                            entity_type: PooledEntityType::CandlestickBody,
+                            in_use: true,
+                        },
                         PriceElement,
                         PaneId::Price,
-                    ));
+                    )).id();
+                    pools.bodies.entities.push(new_entity);
                     spawned_count += 1;
                 }
             }
 
             CandleLODLevel::Medium => {
-                // Medium detail: single OHLC line (despawn full detail entities if they exist)
+                // Medium detail: single OHLC line (hide full detail entities if they exist)
                 if let Some(&entity) = existing_wicks.get(&i) {
-                    commands.entity(entity).despawn();
+                    if let Ok((_, _, _, _, mut visibility)) = query_wicks.get_mut(entity) {
+                        *visibility = Visibility::Hidden;
+                    }
+                    pools.wicks.return_entity(entity);
+                    if let Ok(mut pooled) = pooled_query.get_mut(entity) {
+                        pooled.in_use = false;
+                    }
                 }
                 if let Some(&entity) = existing_bodies.get(&i) {
-                    commands.entity(entity).despawn();
+                    if let Ok((_, _, _, _, mut visibility)) = query_bodies.get_mut(entity) {
+                        *visibility = Visibility::Hidden;
+                    }
+                    pools.bodies.return_entity(entity);
+                    if let Ok(mut pooled) = pooled_query.get_mut(entity) {
+                        pooled.in_use = false;
+                    }
                 }
                 if let Some(&entity) = existing_range.get(&i) {
-                    commands.entity(entity).despawn();
+                    if let Ok((_, _, _, _, mut visibility)) = query_range.get_mut(entity) {
+                        *visibility = Visibility::Hidden;
+                    }
+                    pools.range_lines.return_entity(entity);
+                    if let Ok(mut pooled) = pooled_query.get_mut(entity) {
+                        pooled.in_use = false;
+                    }
                 }
 
                 let low_pos = price_pane.space.to_world(
@@ -235,18 +310,35 @@ pub fn render_candlesticks(
                     Color::srgb(0.9, 0.2, 0.2)  // Red
                 };
 
-                // UPDATE or SPAWN OHLC line entity
+                // UPDATE or GET FROM POOL OHLC line entity
                 if let Some(&entity) = existing_ohlc.get(&i) {
-                    if let Ok((_, _, mut transform, mut sprite)) = query_ohlc.get_mut(entity) {
+                    if let Ok((_, _, mut transform, mut sprite, mut visibility)) = query_ohlc.get_mut(entity) {
                         transform.translation = center.extend(0.0);
                         sprite.color = color;
                         if let Some(ref mut size) = sprite.custom_size {
                             *size = Vec2::new(1.5, height);
                         }
+                        *visibility = Visibility::Visible;
                     }
                     updated_ohlc.insert(i);
+                } else if let Some(entity) = pools.ohlc_lines.get() {
+                    // Reuse from pool
+                    if let Ok((_, mut ohlc, mut transform, mut sprite, mut visibility)) = query_ohlc.get_mut(entity) {
+                        ohlc.candle_index = i;
+                        transform.translation = center.extend(0.0);
+                        sprite.color = color;
+                        if let Some(ref mut size) = sprite.custom_size {
+                            *size = Vec2::new(1.5, height);
+                        }
+                        *visibility = Visibility::Visible;
+                        if let Ok(mut pooled) = pooled_query.get_mut(entity) {
+                            pooled.in_use = true;
+                        }
+                        updated_ohlc.insert(i);
+                    }
                 } else {
-                    commands.spawn((
+                    // Pool exhausted - spawn new
+                    let new_entity = commands.spawn((
                         Sprite {
                             color,
                             custom_size: Some(Vec2::new(1.5, height)),
@@ -254,23 +346,46 @@ pub fn render_candlesticks(
                         },
                         Transform::from_translation(center.extend(0.0)),
                         CandlestickOHLCLine { candle_index: i },
+                        PooledEntity {
+                            entity_type: PooledEntityType::CandlestickOHLC,
+                            in_use: true,
+                        },
                         PriceElement,
                         PaneId::Price,
-                    ));
+                    )).id();
+                    pools.ohlc_lines.entities.push(new_entity);
                     spawned_count += 1;
                 }
             }
 
             CandleLODLevel::Low => {
-                // Low detail: single range line (despawn other entities if they exist)
+                // Low detail: single range line (hide other entities if they exist)
                 if let Some(&entity) = existing_wicks.get(&i) {
-                    commands.entity(entity).despawn();
+                    if let Ok((_, _, _, _, mut visibility)) = query_wicks.get_mut(entity) {
+                        *visibility = Visibility::Hidden;
+                    }
+                    pools.wicks.return_entity(entity);
+                    if let Ok(mut pooled) = pooled_query.get_mut(entity) {
+                        pooled.in_use = false;
+                    }
                 }
                 if let Some(&entity) = existing_bodies.get(&i) {
-                    commands.entity(entity).despawn();
+                    if let Ok((_, _, _, _, mut visibility)) = query_bodies.get_mut(entity) {
+                        *visibility = Visibility::Hidden;
+                    }
+                    pools.bodies.return_entity(entity);
+                    if let Ok(mut pooled) = pooled_query.get_mut(entity) {
+                        pooled.in_use = false;
+                    }
                 }
                 if let Some(&entity) = existing_ohlc.get(&i) {
-                    commands.entity(entity).despawn();
+                    if let Ok((_, _, _, _, mut visibility)) = query_ohlc.get_mut(entity) {
+                        *visibility = Visibility::Hidden;
+                    }
+                    pools.ohlc_lines.return_entity(entity);
+                    if let Ok(mut pooled) = pooled_query.get_mut(entity) {
+                        pooled.in_use = false;
+                    }
                 }
 
                 let low_pos = price_pane.space.to_world(
@@ -294,18 +409,35 @@ pub fn render_candlesticks(
                     Color::srgb(0.9, 0.2, 0.2)  // Red
                 };
 
-                // UPDATE or SPAWN range line entity
+                // UPDATE or GET FROM POOL range line entity
                 if let Some(&entity) = existing_range.get(&i) {
-                    if let Ok((_, _, mut transform, mut sprite)) = query_range.get_mut(entity) {
+                    if let Ok((_, _, mut transform, mut sprite, mut visibility)) = query_range.get_mut(entity) {
                         transform.translation = center.extend(0.0);
                         sprite.color = color;
                         if let Some(ref mut size) = sprite.custom_size {
                             *size = Vec2::new(0.5, height);
                         }
+                        *visibility = Visibility::Visible;
                     }
                     updated_range.insert(i);
+                } else if let Some(entity) = pools.range_lines.get() {
+                    // Reuse from pool
+                    if let Ok((_, mut range, mut transform, mut sprite, mut visibility)) = query_range.get_mut(entity) {
+                        range.candle_index = i;
+                        transform.translation = center.extend(0.0);
+                        sprite.color = color;
+                        if let Some(ref mut size) = sprite.custom_size {
+                            *size = Vec2::new(0.5, height);
+                        }
+                        *visibility = Visibility::Visible;
+                        if let Ok(mut pooled) = pooled_query.get_mut(entity) {
+                            pooled.in_use = true;
+                        }
+                        updated_range.insert(i);
+                    }
                 } else {
-                    commands.spawn((
+                    // Pool exhausted - spawn new
+                    let new_entity = commands.spawn((
                         Sprite {
                             color,
                             custom_size: Some(Vec2::new(0.5, height)),
@@ -313,47 +445,80 @@ pub fn render_candlesticks(
                         },
                         Transform::from_translation(center.extend(0.0)),
                         CandlestickRangeLine { candle_index: i },
+                        PooledEntity {
+                            entity_type: PooledEntityType::CandlestickRange,
+                            in_use: true,
+                        },
                         PriceElement,
                         PaneId::Price,
-                    ));
+                    )).id();
+                    pools.range_lines.entities.push(new_entity);
                     spawned_count += 1;
                 }
             }
         }
     }
 
-    // Despawn entities that are no longer visible
-    let mut despawned_count = 0;
+    // Hide and return to pool entities that are no longer visible
+    let mut hidden_count = 0;
     for (index, entity) in existing_wicks.iter() {
         if !updated_wicks.contains(index) {
-            commands.entity(*entity).despawn();
-            despawned_count += 1;
+            if let Ok((_, _, _, _, mut visibility)) = query_wicks.get_mut(*entity) {
+                *visibility = Visibility::Hidden;
+            }
+            pools.wicks.return_entity(*entity);
+            if let Ok(mut pooled) = pooled_query.get_mut(*entity) {
+                pooled.in_use = false;
+            }
+            hidden_count += 1;
         }
     }
     for (index, entity) in existing_bodies.iter() {
         if !updated_bodies.contains(index) {
-            commands.entity(*entity).despawn();
-            despawned_count += 1;
+            if let Ok((_, _, _, _, mut visibility)) = query_bodies.get_mut(*entity) {
+                *visibility = Visibility::Hidden;
+            }
+            pools.bodies.return_entity(*entity);
+            if let Ok(mut pooled) = pooled_query.get_mut(*entity) {
+                pooled.in_use = false;
+            }
+            hidden_count += 1;
         }
     }
     for (index, entity) in existing_ohlc.iter() {
         if !updated_ohlc.contains(index) {
-            commands.entity(*entity).despawn();
-            despawned_count += 1;
+            if let Ok((_, _, _, _, mut visibility)) = query_ohlc.get_mut(*entity) {
+                *visibility = Visibility::Hidden;
+            }
+            pools.ohlc_lines.return_entity(*entity);
+            if let Ok(mut pooled) = pooled_query.get_mut(*entity) {
+                pooled.in_use = false;
+            }
+            hidden_count += 1;
         }
     }
     for (index, entity) in existing_range.iter() {
         if !updated_range.contains(index) {
-            commands.entity(*entity).despawn();
-            despawned_count += 1;
+            if let Ok((_, _, _, _, mut visibility)) = query_range.get_mut(*entity) {
+                *visibility = Visibility::Hidden;
+            }
+            pools.range_lines.return_entity(*entity);
+            if let Ok(mut pooled) = pooled_query.get_mut(*entity) {
+                pooled.in_use = false;
+            }
+            hidden_count += 1;
         }
     }
 
     #[cfg(debug_assertions)]
     {
         let total_entities = updated_wicks.len() + updated_bodies.len() + updated_ohlc.len() + updated_range.len();
+        let (wick_total, wick_avail) = pools.wicks.stats();
+        let (body_total, body_avail) = pools.bodies.stats();
+        let (ohlc_total, ohlc_avail) = pools.ohlc_lines.stats();
+        let (range_total, range_avail) = pools.range_lines.stats();
         println!(
-            "LOD: {:?} | Candle width: {:.2}px | Rendered {} candles ({}-{}) | Total entities: {} | Spawned: {} | Despawned: {}",
+            "LOD: {:?} | Candle width: {:.2}px | Rendered {} candles ({}-{}) | Total entities: {} | Spawned: {} | Hidden: {}",
             lod_level,
             candle_width_px,
             end - start,
@@ -361,7 +526,14 @@ pub fn render_candlesticks(
             end - 1,
             total_entities,
             spawned_count,
-            despawned_count
+            hidden_count
+        );
+        println!(
+            "Pool stats - Wicks: {}/{} | Bodies: {}/{} | OHLC: {}/{} | Range: {}/{}",
+            wick_avail, wick_total,
+            body_avail, body_total,
+            ohlc_avail, ohlc_total,
+            range_avail, range_total
         );
     }
 }
@@ -370,7 +542,9 @@ pub fn render_volume_bars(
     mut commands: Commands,
     chart: Res<Chart>,
     config: Res<CandlestickLODConfig>,
-    mut query: Query<(Entity, &VolumeBar, &mut Transform, &mut Sprite)>,
+    mut pools: ResMut<EntityPools>,
+    mut query: Query<(Entity, &mut VolumeBar, &mut Transform, &mut Sprite, &mut Visibility)>,
+    mut pooled_query: Query<&mut PooledEntity>,
 ) {
     if !chart.needs_redraw {
         return;
@@ -396,9 +570,13 @@ pub fn render_volume_bars(
 
     // Check if candles are too small to render volume bars
     if price_pane.space.candle_width_px < config.volume_render_threshold {
-        // Despawn all volume bars and return
-        for (entity, _, _, _) in query.iter() {
-            commands.entity(entity).despawn();
+        // Hide all volume bars and return to pool
+        for (entity, _, _, _, mut visibility) in query.iter_mut() {
+            *visibility = Visibility::Hidden;
+            pools.volume_bars.return_entity(entity);
+            if let Ok(mut pooled) = pooled_query.get_mut(entity) {
+                pooled.in_use = false;
+            }
         }
         return;
     }
@@ -415,12 +593,13 @@ pub fn render_volume_bars(
     use std::collections::{HashMap, HashSet};
     let mut existing_bars: HashMap<usize, Entity> = HashMap::new();
 
-    for (entity, bar, _, _) in query.iter() {
+    for (entity, bar, _, _, _) in query.iter() {
         existing_bars.insert(bar.candle_index, entity);
     }
 
     // Track which entities we updated
     let mut updated_bars = HashSet::new();
+    let mut spawned_count = 0;
 
     // Process each visible candle
     for i in start..end {
@@ -458,20 +637,36 @@ pub fn render_volume_bars(
             Color::srgba(0.9, 0.2, 0.2, 0.6)  // Red with transparency
         };
 
-        // UPDATE or SPAWN volume bar entity
+        // UPDATE or GET FROM POOL volume bar entity
         if let Some(&entity) = existing_bars.get(&i) {
             // Update existing bar
-            if let Ok((_, _, mut transform, mut sprite)) = query.get_mut(entity) {
+            if let Ok((_, _, mut transform, mut sprite, mut visibility)) = query.get_mut(entity) {
                 transform.translation = bar_center.extend(0.0);
                 sprite.color = bar_color;
                 if let Some(ref mut size) = sprite.custom_size {
                     *size = Vec2::new(bar_width, bar_height);
                 }
+                *visibility = Visibility::Visible;
             }
             updated_bars.insert(i);
+        } else if let Some(entity) = pools.volume_bars.get() {
+            // Reuse from pool
+            if let Ok((_, mut bar, mut transform, mut sprite, mut visibility)) = query.get_mut(entity) {
+                bar.candle_index = i;
+                transform.translation = bar_center.extend(0.0);
+                sprite.color = bar_color;
+                if let Some(ref mut size) = sprite.custom_size {
+                    *size = Vec2::new(bar_width, bar_height);
+                }
+                *visibility = Visibility::Visible;
+                if let Ok(mut pooled) = pooled_query.get_mut(entity) {
+                    pooled.in_use = true;
+                }
+                updated_bars.insert(i);
+            }
         } else {
-            // Spawn new bar entity
-            commands.spawn((
+            // Pool exhausted - spawn new
+            let new_entity = commands.spawn((
                 Sprite {
                     color: bar_color,
                     custom_size: Some(Vec2::new(bar_width, bar_height)),
@@ -479,29 +674,47 @@ pub fn render_volume_bars(
                 },
                 Transform::from_translation(bar_center.extend(0.0)),
                 VolumeBar { candle_index: i },
+                PooledEntity {
+                    entity_type: PooledEntityType::VolumeBar,
+                    in_use: true,
+                },
                 VolumeElement,
                 PaneId::Volume,
-            ));
+            )).id();
+            pools.volume_bars.entities.push(new_entity);
+            spawned_count += 1;
         }
     }
 
-    // Despawn entities that are no longer visible
+    // Hide and return to pool entities that are no longer visible
+    let mut hidden_count = 0;
     for (index, entity) in existing_bars.iter() {
         if !updated_bars.contains(index) {
-            commands.entity(*entity).despawn();
+            if let Ok((_, _, _, _, mut visibility)) = query.get_mut(*entity) {
+                *visibility = Visibility::Hidden;
+            }
+            pools.volume_bars.return_entity(*entity);
+            if let Ok(mut pooled) = pooled_query.get_mut(*entity) {
+                pooled.in_use = false;
+            }
+            hidden_count += 1;
         }
     }
 
     #[cfg(debug_assertions)]
-    println!(
-        "Rendered {} volume bars (indices {}-{}), updated: {}, spawned: {}, despawned: {}",
-        end - start,
-        start,
-        end - 1,
-        updated_bars.len(),
-        (end - start) - updated_bars.len(),
-        existing_bars.len() - updated_bars.len()
-    );
+    {
+        let (vol_total, vol_avail) = pools.volume_bars.stats();
+        println!(
+            "Rendered {} volume bars (indices {}-{}), updated: {}, spawned: {}, hidden: {}",
+            end - start,
+            start,
+            end - 1,
+            updated_bars.len(),
+            spawned_count,
+            hidden_count
+        );
+        println!("Volume pool stats: {}/{}", vol_avail, vol_total);
+    }
 }
 
 /// Initialize persistent crosshair entities (called once at startup from setup)
