@@ -659,6 +659,76 @@ impl ChartDatabase {
         )?;
         Ok((min_time, max_time))
     }
+
+    /// Get available timeframes for a ticker
+    pub fn get_available_timeframes(&self, ticker_id: i32) -> Result<Vec<String>, duckdb::Error> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT DISTINCT timeframe FROM klines WHERE ticker_id = ? ORDER BY timeframe"
+        )?;
+        let timeframes = stmt.query_map(
+            params![ticker_id],
+            |row| row.get(0)
+        )?
+        .collect::<Result<Vec<String>, _>>()?;
+
+        // Sort by timeframe duration order (not alphabetically)
+        let mut sorted = timeframes;
+        sorted.sort_by_key(|tf| {
+            match tf.as_str() {
+                "1m" => 1,
+                "3m" => 2,
+                "5m" => 3,
+                "15m" => 4,
+                "30m" => 5,
+                "1h" => 6,
+                "2h" => 7,
+                "4h" => 8,
+                "6h" => 9,
+                "8h" => 10,
+                "12h" => 11,
+                "1d" => 12,
+                "3d" => 13,
+                "1w" => 14,
+                "1M" => 15,
+                _ => 99,
+            }
+        });
+
+        Ok(sorted)
+    }
+
+    /// Resolve ticker symbol to ticker_id
+    pub fn resolve_ticker(&self, symbol: &str) -> Result<i32, duckdb::Error> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT ticker_id FROM tickers WHERE symbol = ? LIMIT 1"
+        )?;
+        let ticker_id: i32 = stmt.query_row(
+            params![symbol],
+            |row| row.get(0)
+        )?;
+        Ok(ticker_id)
+    }
+
+    /// Check if data exists for given parameters (returns count)
+    pub fn check_data_exists(
+        &self,
+        ticker_id: i32,
+        timeframe: &str,
+        start_time: i64,
+        end_time: i64,
+    ) -> Result<usize, duckdb::Error> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT COUNT(*) FROM klines WHERE ticker_id = ? AND timeframe = ? AND candle_time BETWEEN ? AND ?"
+        )?;
+        let count: i64 = stmt.query_row(
+            params![ticker_id, timeframe, start_time, end_time],
+            |row| row.get(0)
+        )?;
+        Ok(count as usize)
+    }
 }
 
 /// Interaction state
@@ -809,6 +879,73 @@ pub struct GridElement;
 /// Marker component for crosshair elements
 #[derive(Component)]
 pub struct CrosshairElement;
+
+// ============================================================================
+// TIMEFRAME MANAGEMENT
+// ============================================================================
+
+/// Manages available timeframes and current selection
+#[derive(Resource, Clone)]
+pub struct TimeframeManager {
+    pub ticker_id: i32,
+    pub current_timeframe: String,
+    pub available_timeframes: Vec<String>,
+}
+
+impl TimeframeManager {
+    pub fn new(ticker_id: i32, current_timeframe: String) -> Self {
+        Self {
+            ticker_id,
+            current_timeframe,
+            available_timeframes: Vec::new(),
+        }
+    }
+
+    /// Get all valid Binance timeframes in order
+    pub fn all_timeframes() -> Vec<&'static str> {
+        vec![
+            "1m", "3m", "5m", "15m", "30m",
+            "1h", "2h", "4h", "6h", "8h", "12h",
+            "1d", "3d",
+            "1w",
+            "1M"
+        ]
+    }
+
+    /// Get the next timeframe in the sequence (only from available timeframes)
+    pub fn next_timeframe(&self) -> Option<String> {
+        if self.available_timeframes.is_empty() {
+            return None;
+        }
+
+        // Find current position in available timeframes
+        self.available_timeframes.iter()
+            .position(|tf| tf == &self.current_timeframe)
+            .and_then(|idx| self.available_timeframes.get(idx + 1))
+            .cloned()
+    }
+
+    /// Get the previous timeframe in the sequence (only from available timeframes)
+    pub fn prev_timeframe(&self) -> Option<String> {
+        if self.available_timeframes.is_empty() {
+            return None;
+        }
+
+        // Find current position in available timeframes
+        self.available_timeframes.iter()
+            .position(|tf| tf == &self.current_timeframe)
+            .and_then(|idx| if idx > 0 { self.available_timeframes.get(idx - 1) } else { None })
+            .cloned()
+    }
+}
+
+/// Event fired when user requests timeframe change
+#[derive(Message, Clone)]
+pub struct TimeframeChangeRequest {
+    pub from: String,
+    pub to: String,
+    pub ticker_id: i32,
+}
 
 // ============================================================================
 // TESTS
