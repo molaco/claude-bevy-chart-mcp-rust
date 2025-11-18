@@ -923,7 +923,7 @@ impl Default for CandlestickLODConfig {
         Self {
             full_detail_threshold: 3.0,
             medium_detail_threshold: 1.0,
-            volume_render_threshold: 2.0,
+            volume_render_threshold: 0.5,
         }
     }
 }

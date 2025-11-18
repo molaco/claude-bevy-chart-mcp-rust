@@ -389,15 +389,18 @@ pub fn render_volume_bars(
     let price_pane = chart.panes.iter()
         .find(|p| matches!(p.id, PaneId::Price));
 
-    if let Some(price_pane) = price_pane {
-        // Check if candles are too small to render volume bars
-        if price_pane.space.candle_width_px < config.volume_render_threshold {
-            // Despawn all volume bars and return
-            for (entity, _, _, _) in query.iter() {
-                commands.entity(entity).despawn();
-            }
-            return;
+    if price_pane.is_none() {
+        return;
+    }
+    let price_pane = price_pane.unwrap();
+
+    // Check if candles are too small to render volume bars
+    if price_pane.space.candle_width_px < config.volume_render_threshold {
+        // Despawn all volume bars and return
+        for (entity, _, _, _) in query.iter() {
+            commands.entity(entity).despawn();
         }
+        return;
     }
 
     // Get shared X-axis state
@@ -438,7 +441,15 @@ pub fn render_volume_bars(
             (bar_bottom.y + bar_top.y) / 2.0,
         );
         let bar_height = (bar_top.y - bar_bottom.y).abs().max(1.0);
-        let bar_width = volume_pane.space.candle_width_px * 0.7;
+
+        // Determine bar width based on candle size (LOD)
+        let bar_width = if price_pane.space.candle_width_px >= 2.0 {
+            // Full detail: 70% of candle width
+            volume_pane.space.candle_width_px * 0.7
+        } else {
+            // Thin detail: 30% of candle width when zoomed out
+            volume_pane.space.candle_width_px * 0.3
+        };
 
         // Color based on candle direction
         let bar_color = if candle.close >= candle.open {
