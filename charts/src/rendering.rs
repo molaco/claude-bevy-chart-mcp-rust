@@ -150,7 +150,13 @@ pub fn render_candlesticks(
     };
 
     // Determine LOD level based on candle width
-    let candle_width_px = price_pane.space.candle_width_px;
+    // Use aggregated candle count for width calculation if aggregation is active
+    let effective_candle_count = if level != AggregationLevel::None {
+        candles_to_render.len()
+    } else {
+        chart.visible_candle_count
+    };
+    let candle_width_px = price_pane.space.viewport.width() / effective_candle_count as f32;
     let lod_level = calculate_lod_level(candle_width_px, &config);
 
     // Collect existing entities by candle_index
@@ -708,18 +714,6 @@ pub fn render_volume_bars(
     }
     let price_pane = price_pane.unwrap();
 
-    // Check if candles are too small to render volume bars
-    if price_pane.space.candle_width_px < config.volume_render_threshold {
-        // Hide all volume bars and return to pool
-        for (entity, _, _, _, mut visibility) in query.iter_mut() {
-            *visibility = Visibility::Hidden;
-            pools.volume_bars.return_entity(entity, PooledEntityType::VolumeBar);
-            if let Ok(mut pooled) = pooled_query.get_mut(entity) {
-                pooled.in_use = false;
-            }
-        }
-        return;
-    }
 
     // Get shared X-axis state
     let start = chart.visible_candle_start;
@@ -756,6 +750,27 @@ pub fn render_volume_bars(
         // No aggregation needed
         (&chart.candles[start..end], start)
     };
+
+    // Check if candles are too small to render volume bars
+    // Use aggregated candle count for width calculation if aggregation is active
+    let effective_candle_count = if level != AggregationLevel::None {
+        candles_to_render.len()
+    } else {
+        chart.visible_candle_count
+    };
+    let candle_width_px = price_pane.space.viewport.width() / effective_candle_count as f32;
+
+    if candle_width_px < config.volume_render_threshold {
+        // Hide all volume bars and return to pool
+        for (entity, _, _, _, mut visibility) in query.iter_mut() {
+            *visibility = Visibility::Hidden;
+            pools.volume_bars.return_entity(entity, PooledEntityType::VolumeBar);
+            if let Ok(mut pooled) = pooled_query.get_mut(entity) {
+                pooled.in_use = false;
+            }
+        }
+        return;
+    }
 
     // Collect existing entities by candle_index
     use std::collections::{HashMap, HashSet};
