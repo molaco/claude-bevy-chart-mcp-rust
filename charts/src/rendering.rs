@@ -184,7 +184,12 @@ pub fn render_candlesticks(
 
     // Process each visible candle based on LOD level
     for (idx, candle) in candles_to_render.iter().enumerate() {
-        let i = index_mapping_offset + idx;  // For world space calculations
+        // Map aggregated index to original world space
+        let i = if level != AggregationLevel::None {
+            start + (idx * level.ratio())  // Spread aggregated candles proportionally
+        } else {
+            index_mapping_offset + idx
+        };
 
         match lod_level {
             CandleLODLevel::Full => {
@@ -766,7 +771,12 @@ pub fn render_volume_bars(
 
     // Process each visible candle
     for (idx, candle) in candles_to_render.iter().enumerate() {
-        let i = index_mapping_offset + idx;  // For world space calculations
+        // Map aggregated index to original world space
+        let i = if level != AggregationLevel::None {
+            start + (idx * level.ratio())  // Spread aggregated candles proportionally
+        } else {
+            index_mapping_offset + idx
+        };
 
         // Calculate bottom (0) and top (volume) positions
         let bar_bottom = volume_pane.space.to_world(
