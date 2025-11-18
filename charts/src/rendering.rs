@@ -28,8 +28,23 @@ fn format_volume(value: f32) -> String {
 pub fn render_candlesticks(
     mut commands: Commands,
     chart: Res<Chart>,
-    mut query_wicks: Query<(Entity, &CandlestickWick, &mut Transform, &mut Sprite), Without<CandlestickBody>>,
-    mut query_bodies: Query<(Entity, &CandlestickBody, &mut Transform, &mut Sprite), Without<CandlestickWick>>,
+    config: Res<CandlestickLODConfig>,
+    mut query_wicks: Query<
+        (Entity, &CandlestickWick, &mut Transform, &mut Sprite),
+        (Without<CandlestickBody>, Without<CandlestickOHLCLine>, Without<CandlestickRangeLine>)
+    >,
+    mut query_bodies: Query<
+        (Entity, &CandlestickBody, &mut Transform, &mut Sprite),
+        (Without<CandlestickWick>, Without<CandlestickOHLCLine>, Without<CandlestickRangeLine>)
+    >,
+    mut query_ohlc: Query<
+        (Entity, &CandlestickOHLCLine, &mut Transform, &mut Sprite),
+        (Without<CandlestickWick>, Without<CandlestickBody>, Without<CandlestickRangeLine>)
+    >,
+    mut query_range: Query<
+        (Entity, &CandlestickRangeLine, &mut Transform, &mut Sprite),
+        (Without<CandlestickWick>, Without<CandlestickBody>, Without<CandlestickOHLCLine>)
+    >,
 ) {
     if !chart.needs_redraw {
         return;
@@ -52,10 +67,16 @@ pub fn render_candlesticks(
         return;
     }
 
-    // Collect existing entities by candle_index (using without_mut to avoid borrow conflicts)
+    // Determine LOD level based on candle width
+    let candle_width_px = price_pane.space.candle_width_px;
+    let lod_level = calculate_lod_level(candle_width_px, &config);
+
+    // Collect existing entities by candle_index
     use std::collections::HashMap;
     let mut existing_wicks: HashMap<usize, Entity> = HashMap::new();
     let mut existing_bodies: HashMap<usize, Entity> = HashMap::new();
+    let mut existing_ohlc: HashMap<usize, Entity> = HashMap::new();
+    let mut existing_range: HashMap<usize, Entity> = HashMap::new();
 
     for (entity, wick, _, _) in query_wicks.iter() {
         existing_wicks.insert(wick.candle_index, entity);
@@ -63,133 +84,292 @@ pub fn render_candlesticks(
     for (entity, body, _, _) in query_bodies.iter() {
         existing_bodies.insert(body.candle_index, entity);
     }
+    for (entity, ohlc, _, _) in query_ohlc.iter() {
+        existing_ohlc.insert(ohlc.candle_index, entity);
+    }
+    for (entity, range_line, _, _) in query_range.iter() {
+        existing_range.insert(range_line.candle_index, entity);
+    }
 
     // Track which entities we updated (to avoid despawning them)
     let mut updated_wicks = std::collections::HashSet::new();
     let mut updated_bodies = std::collections::HashSet::new();
+    let mut updated_ohlc = std::collections::HashSet::new();
+    let mut updated_range = std::collections::HashSet::new();
 
-    // Process each visible candle
+    // Counters for debug output
+    let mut spawned_count = 0;
+
+    // Process each visible candle based on LOD level
     for i in start..end {
         let candle = &chart.candles[i];
 
-        // Calculate positions using ChartSpace::to_world() with shared X-axis params
-        let wick_bottom = price_pane.space.to_world(
-            i, candle.low as f32,
-            chart.visible_candle_start, chart.visible_candle_count
-        );
-        let wick_top = price_pane.space.to_world(
-            i, candle.high as f32,
-            chart.visible_candle_start, chart.visible_candle_count
-        );
-        let body_open = price_pane.space.to_world(
-            i, candle.open as f32,
-            chart.visible_candle_start, chart.visible_candle_count
-        );
-        let body_close = price_pane.space.to_world(
-            i, candle.close as f32,
-            chart.visible_candle_start, chart.visible_candle_count
-        );
+        match lod_level {
+            CandleLODLevel::Full => {
+                // Full detail: render wick + body (despawn LOD entities if they exist)
+                if let Some(&entity) = existing_ohlc.get(&i) {
+                    commands.entity(entity).despawn();
+                }
+                if let Some(&entity) = existing_range.get(&i) {
+                    commands.entity(entity).despawn();
+                }
 
-        let wick_center = Vec2::new(
-            (wick_bottom.x + wick_top.x) / 2.0,
-            (wick_bottom.y + wick_top.y) / 2.0,
-        );
-        let wick_height = (wick_top.y - wick_bottom.y).abs().max(1.0);
+                // Calculate positions using ChartSpace::to_world()
+                let wick_bottom = price_pane.space.to_world(
+                    i, candle.low as f32,
+                    chart.visible_candle_start, chart.visible_candle_count
+                );
+                let wick_top = price_pane.space.to_world(
+                    i, candle.high as f32,
+                    chart.visible_candle_start, chart.visible_candle_count
+                );
+                let body_open = price_pane.space.to_world(
+                    i, candle.open as f32,
+                    chart.visible_candle_start, chart.visible_candle_count
+                );
+                let body_close = price_pane.space.to_world(
+                    i, candle.close as f32,
+                    chart.visible_candle_start, chart.visible_candle_count
+                );
 
-        // UPDATE or SPAWN wick entity
-        if let Some(&entity) = existing_wicks.get(&i) {
-            // Update existing wick
-            if let Ok((_, _, mut transform, mut sprite)) = query_wicks.get_mut(entity) {
-                transform.translation = wick_center.extend(0.0);
-                if let Some(ref mut size) = sprite.custom_size {
-                    *size = Vec2::new(1.0, wick_height);
+                let wick_center = Vec2::new(
+                    (wick_bottom.x + wick_top.x) / 2.0,
+                    (wick_bottom.y + wick_top.y) / 2.0,
+                );
+                let wick_height = (wick_top.y - wick_bottom.y).abs().max(1.0);
+
+                // UPDATE or SPAWN wick entity
+                if let Some(&entity) = existing_wicks.get(&i) {
+                    if let Ok((_, _, mut transform, mut sprite)) = query_wicks.get_mut(entity) {
+                        transform.translation = wick_center.extend(0.0);
+                        if let Some(ref mut size) = sprite.custom_size {
+                            *size = Vec2::new(1.0, wick_height);
+                        }
+                    }
+                    updated_wicks.insert(i);
+                } else {
+                    commands.spawn((
+                        Sprite {
+                            color: Color::srgb(0.5, 0.5, 0.5),
+                            custom_size: Some(Vec2::new(1.0, wick_height)),
+                            ..default()
+                        },
+                        Transform::from_translation(wick_center.extend(0.0)),
+                        CandlestickWick { candle_index: i },
+                        PriceElement,
+                        PaneId::Price,
+                    ));
+                    spawned_count += 1;
+                }
+
+                // Calculate body properties
+                let body_width = candle_width_px * 0.7;
+                let body_height = (body_close.y - body_open.y).abs().max(1.0);
+                let body_center = Vec2::new(
+                    (body_open.x + body_close.x) / 2.0,
+                    (body_open.y + body_close.y) / 2.0,
+                );
+
+                let body_color = if candle.close >= candle.open {
+                    Color::srgb(0.0, 0.8, 0.2)  // Green
+                } else {
+                    Color::srgb(0.9, 0.2, 0.2)  // Red
+                };
+
+                // UPDATE or SPAWN body entity
+                if let Some(&entity) = existing_bodies.get(&i) {
+                    if let Ok((_, _, mut transform, mut sprite)) = query_bodies.get_mut(entity) {
+                        transform.translation = body_center.extend(1.0);
+                        sprite.color = body_color;
+                        if let Some(ref mut size) = sprite.custom_size {
+                            *size = Vec2::new(body_width, body_height);
+                        }
+                    }
+                    updated_bodies.insert(i);
+                } else {
+                    commands.spawn((
+                        Sprite {
+                            color: body_color,
+                            custom_size: Some(Vec2::new(body_width, body_height)),
+                            ..default()
+                        },
+                        Transform::from_translation(body_center.extend(1.0)),
+                        CandlestickBody { candle_index: i },
+                        PriceElement,
+                        PaneId::Price,
+                    ));
+                    spawned_count += 1;
                 }
             }
-            updated_wicks.insert(i);
-        } else {
-            // Spawn new wick entity
-            commands.spawn((
-                Sprite {
-                    color: Color::srgb(0.5, 0.5, 0.5),
-                    custom_size: Some(Vec2::new(1.0, wick_height)),
-                    ..default()
-                },
-                Transform::from_translation(wick_center.extend(0.0)),
-                CandlestickWick { candle_index: i },
-                PriceElement,
-                PaneId::Price,
-            ));
-        }
 
-        // Calculate body properties
-        let body_width = price_pane.space.candle_width_px * 0.7;
-        let body_height = (body_close.y - body_open.y).abs().max(1.0);
-        let body_center = Vec2::new(
-            (body_open.x + body_close.x) / 2.0,
-            (body_open.y + body_close.y) / 2.0,
-        );
+            CandleLODLevel::Medium => {
+                // Medium detail: single OHLC line (despawn full detail entities if they exist)
+                if let Some(&entity) = existing_wicks.get(&i) {
+                    commands.entity(entity).despawn();
+                }
+                if let Some(&entity) = existing_bodies.get(&i) {
+                    commands.entity(entity).despawn();
+                }
+                if let Some(&entity) = existing_range.get(&i) {
+                    commands.entity(entity).despawn();
+                }
 
-        let body_color = if candle.close >= candle.open {
-            Color::srgb(0.0, 0.8, 0.2)  // Green
-        } else {
-            Color::srgb(0.9, 0.2, 0.2)  // Red
-        };
+                let low_pos = price_pane.space.to_world(
+                    i, candle.low as f32,
+                    chart.visible_candle_start, chart.visible_candle_count
+                );
+                let high_pos = price_pane.space.to_world(
+                    i, candle.high as f32,
+                    chart.visible_candle_start, chart.visible_candle_count
+                );
 
-        // UPDATE or SPAWN body entity
-        if let Some(&entity) = existing_bodies.get(&i) {
-            // Update existing body
-            if let Ok((_, _, mut transform, mut sprite)) = query_bodies.get_mut(entity) {
-                transform.translation = body_center.extend(1.0);
-                sprite.color = body_color;
-                if let Some(ref mut size) = sprite.custom_size {
-                    *size = Vec2::new(body_width, body_height);
+                let center = Vec2::new(
+                    (low_pos.x + high_pos.x) / 2.0,
+                    (low_pos.y + high_pos.y) / 2.0,
+                );
+                let height = (high_pos.y - low_pos.y).abs().max(1.0);
+
+                let color = if candle.close >= candle.open {
+                    Color::srgb(0.0, 0.8, 0.2)  // Green
+                } else {
+                    Color::srgb(0.9, 0.2, 0.2)  // Red
+                };
+
+                // UPDATE or SPAWN OHLC line entity
+                if let Some(&entity) = existing_ohlc.get(&i) {
+                    if let Ok((_, _, mut transform, mut sprite)) = query_ohlc.get_mut(entity) {
+                        transform.translation = center.extend(0.0);
+                        sprite.color = color;
+                        if let Some(ref mut size) = sprite.custom_size {
+                            *size = Vec2::new(1.5, height);
+                        }
+                    }
+                    updated_ohlc.insert(i);
+                } else {
+                    commands.spawn((
+                        Sprite {
+                            color,
+                            custom_size: Some(Vec2::new(1.5, height)),
+                            ..default()
+                        },
+                        Transform::from_translation(center.extend(0.0)),
+                        CandlestickOHLCLine { candle_index: i },
+                        PriceElement,
+                        PaneId::Price,
+                    ));
+                    spawned_count += 1;
                 }
             }
-            updated_bodies.insert(i);
-        } else {
-            // Spawn new body entity
-            commands.spawn((
-                Sprite {
-                    color: body_color,
-                    custom_size: Some(Vec2::new(body_width, body_height)),
-                    ..default()
-                },
-                Transform::from_translation(body_center.extend(1.0)),
-                CandlestickBody { candle_index: i },
-                PriceElement,
-                PaneId::Price,
-            ));
+
+            CandleLODLevel::Low => {
+                // Low detail: single range line (despawn other entities if they exist)
+                if let Some(&entity) = existing_wicks.get(&i) {
+                    commands.entity(entity).despawn();
+                }
+                if let Some(&entity) = existing_bodies.get(&i) {
+                    commands.entity(entity).despawn();
+                }
+                if let Some(&entity) = existing_ohlc.get(&i) {
+                    commands.entity(entity).despawn();
+                }
+
+                let low_pos = price_pane.space.to_world(
+                    i, candle.low as f32,
+                    chart.visible_candle_start, chart.visible_candle_count
+                );
+                let high_pos = price_pane.space.to_world(
+                    i, candle.high as f32,
+                    chart.visible_candle_start, chart.visible_candle_count
+                );
+
+                let center = Vec2::new(
+                    (low_pos.x + high_pos.x) / 2.0,
+                    (low_pos.y + high_pos.y) / 2.0,
+                );
+                let height = (high_pos.y - low_pos.y).abs().max(1.0);
+
+                let color = if candle.close >= candle.open {
+                    Color::srgb(0.0, 0.8, 0.2)  // Green
+                } else {
+                    Color::srgb(0.9, 0.2, 0.2)  // Red
+                };
+
+                // UPDATE or SPAWN range line entity
+                if let Some(&entity) = existing_range.get(&i) {
+                    if let Ok((_, _, mut transform, mut sprite)) = query_range.get_mut(entity) {
+                        transform.translation = center.extend(0.0);
+                        sprite.color = color;
+                        if let Some(ref mut size) = sprite.custom_size {
+                            *size = Vec2::new(0.5, height);
+                        }
+                    }
+                    updated_range.insert(i);
+                } else {
+                    commands.spawn((
+                        Sprite {
+                            color,
+                            custom_size: Some(Vec2::new(0.5, height)),
+                            ..default()
+                        },
+                        Transform::from_translation(center.extend(0.0)),
+                        CandlestickRangeLine { candle_index: i },
+                        PriceElement,
+                        PaneId::Price,
+                    ));
+                    spawned_count += 1;
+                }
+            }
         }
     }
 
     // Despawn entities that are no longer visible
+    let mut despawned_count = 0;
     for (index, entity) in existing_wicks.iter() {
         if !updated_wicks.contains(index) {
             commands.entity(*entity).despawn();
+            despawned_count += 1;
         }
     }
     for (index, entity) in existing_bodies.iter() {
         if !updated_bodies.contains(index) {
             commands.entity(*entity).despawn();
+            despawned_count += 1;
+        }
+    }
+    for (index, entity) in existing_ohlc.iter() {
+        if !updated_ohlc.contains(index) {
+            commands.entity(*entity).despawn();
+            despawned_count += 1;
+        }
+    }
+    for (index, entity) in existing_range.iter() {
+        if !updated_range.contains(index) {
+            commands.entity(*entity).despawn();
+            despawned_count += 1;
         }
     }
 
     #[cfg(debug_assertions)]
-    println!(
-        "Rendered {} candles (indices {}-{}), updated: {} wicks + {} bodies, spawned: {}, despawned: {}",
-        end - start,
-        start,
-        end - 1,
-        updated_wicks.len(),
-        updated_bodies.len(),
-        (end - start) * 2 - (updated_wicks.len() + updated_bodies.len()),
-        (existing_wicks.len() - updated_wicks.len()) + (existing_bodies.len() - updated_bodies.len())
-    );
+    {
+        let total_entities = updated_wicks.len() + updated_bodies.len() + updated_ohlc.len() + updated_range.len();
+        println!(
+            "LOD: {:?} | Candle width: {:.2}px | Rendered {} candles ({}-{}) | Total entities: {} | Spawned: {} | Despawned: {}",
+            lod_level,
+            candle_width_px,
+            end - start,
+            start,
+            end - 1,
+            total_entities,
+            spawned_count,
+            despawned_count
+        );
+    }
 }
 
 pub fn render_volume_bars(
     mut commands: Commands,
     chart: Res<Chart>,
+    config: Res<CandlestickLODConfig>,
     mut query: Query<(Entity, &VolumeBar, &mut Transform, &mut Sprite)>,
 ) {
     if !chart.needs_redraw {
@@ -204,6 +384,21 @@ pub fn render_volume_bars(
         return;
     }
     let volume_pane = volume_pane.unwrap();
+
+    // Find the Price pane to get candle width
+    let price_pane = chart.panes.iter()
+        .find(|p| matches!(p.id, PaneId::Price));
+
+    if let Some(price_pane) = price_pane {
+        // Check if candles are too small to render volume bars
+        if price_pane.space.candle_width_px < config.volume_render_threshold {
+            // Despawn all volume bars and return
+            for (entity, _, _, _) in query.iter() {
+                commands.entity(entity).despawn();
+            }
+            return;
+        }
+    }
 
     // Get shared X-axis state
     let start = chart.visible_candle_start;

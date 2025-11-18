@@ -397,6 +397,7 @@ fn setup(
     commands.insert_resource(Crosshair::default());
     commands.insert_resource(VolumeToggleState::default());
     commands.insert_resource(ScreenshotCounter::default());
+    commands.insert_resource(CandlestickLODConfig::default());
 
     println!("Setup complete! Press 'V' to toggle volume pane, 'F' to take screenshot.");
     println!("Press Ctrl+Left/Right to switch between timeframes.");

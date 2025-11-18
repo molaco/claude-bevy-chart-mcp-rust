@@ -881,6 +881,65 @@ pub struct GridElement;
 pub struct CrosshairElement;
 
 // ============================================================================
+// LOD (LEVEL OF DETAIL) SYSTEM
+// ============================================================================
+
+/// Level of detail for candlestick rendering
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CandleLODLevel {
+    /// Full detail: separate wick and body sprites (2 entities per candle)
+    Full,
+    /// Medium detail: single OHLC line (1 entity per candle)
+    Medium,
+    /// Low detail: single range line (1 entity per candle)
+    Low,
+}
+
+/// Marker component for OHLC line entities (Medium LOD)
+#[derive(Component)]
+pub struct CandlestickOHLCLine {
+    pub candle_index: usize,
+}
+
+/// Marker component for range line entities (Low LOD)
+#[derive(Component)]
+pub struct CandlestickRangeLine {
+    pub candle_index: usize,
+}
+
+/// Configuration for LOD system
+#[derive(Resource, Clone)]
+pub struct CandlestickLODConfig {
+    /// Minimum candle width (px) for full detail rendering
+    pub full_detail_threshold: f32,
+    /// Minimum candle width (px) for medium detail rendering
+    pub medium_detail_threshold: f32,
+    /// Minimum candle width (px) to render volume bars
+    pub volume_render_threshold: f32,
+}
+
+impl Default for CandlestickLODConfig {
+    fn default() -> Self {
+        Self {
+            full_detail_threshold: 3.0,
+            medium_detail_threshold: 1.0,
+            volume_render_threshold: 2.0,
+        }
+    }
+}
+
+/// Calculate LOD level based on candle width in pixels
+pub fn calculate_lod_level(candle_width_px: f32, config: &CandlestickLODConfig) -> CandleLODLevel {
+    if candle_width_px >= config.full_detail_threshold {
+        CandleLODLevel::Full
+    } else if candle_width_px >= config.medium_detail_threshold {
+        CandleLODLevel::Medium
+    } else {
+        CandleLODLevel::Low
+    }
+}
+
+// ============================================================================
 // TIMEFRAME MANAGEMENT
 // ============================================================================
 
