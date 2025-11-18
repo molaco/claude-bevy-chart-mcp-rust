@@ -186,7 +186,6 @@ fn main() {
         .add_systems(PostStartup, ui_layout::reparent_chat_to_container)
         .add_systems(Update, update_chart_context)
         .add_systems(Update, (handle_focus_tab, handle_focus_click, update_focus_indicators, manage_text_input_focus).chain())
-        .add_systems(Update, (handle_mouse_input, update_crosshair).chain()) // Ensures crosshair updates immediately after mouse input
         .add_systems(Update, toggle_volume_pane)
         .add_systems(Update, toggle_sma_indicators)
         .add_systems(Update, check_lazy_load)
@@ -195,6 +194,7 @@ fn main() {
         .add_systems(Update, update_timeframe_label)
         .add_systems(Update, handle_timeframe_keyboard)
         .add_systems(Update, handle_timeframe_change)
+        .add_systems(Update, (handle_mouse_input, update_crosshair).chain()) // Ensures crosshair updates immediately after mouse input
         .add_systems(
             Update,
             (
@@ -204,7 +204,8 @@ fn main() {
                 render_volume_bars,
                 reset_redraw_flag,
             )
-                .chain(),
+                .chain()
+                .after(handle_mouse_input), // CRITICAL: Ensure rendering runs AFTER interaction updates
         ) // Run rendering systems in sequence, then reset flag
         .run();
 }
