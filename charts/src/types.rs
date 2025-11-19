@@ -799,6 +799,9 @@ pub struct InteractionState {
     pub dragging: bool,
     pub drag_start_pos: Vec2,
 
+    // Pan fractional accumulation (Issue #8 fix)
+    pub accumulated_pan_delta: f32,  // Accumulates fractional candle movement for smooth panning
+
     // Pane resize state
     pub hover_resize_gap: Option<usize>, // Which gap is being hovered
     pub resizing_gap: Option<usize>,     // Which gap is being dragged

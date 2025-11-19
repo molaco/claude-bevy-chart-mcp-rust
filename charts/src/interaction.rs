@@ -137,14 +137,26 @@ pub fn handle_mouse_input(
 
     if mouse_button.just_released(MouseButton::Left) {
         interaction.dragging = false;
+        // Issue #8 fix: Reset accumulated pan delta when drag ends
+        interaction.accumulated_pan_delta = 0.0;
     }
 
     if interaction.dragging && !chart.panes.is_empty() {
         let delta_x = interaction.mouse_pos.x - interaction.drag_start_pos.x;
         let candle_width_px = chart.panes[0].space.effective_candle_width_px;
-        let candles_moved = -(delta_x / candle_width_px) as i32;
+
+        // Issue #8 fix: Accumulate fractional movement to avoid dead zones
+        // Instead of truncating immediately, we keep track of fractional candles
+        let candle_delta = -delta_x / candle_width_px;
+        interaction.accumulated_pan_delta += candle_delta;
+
+        // Only apply integer movement, keeping the fractional part
+        let candles_moved = interaction.accumulated_pan_delta as i32;
 
         if candles_moved != 0 {
+            // Subtract the integer part, keeping the fractional remainder
+            interaction.accumulated_pan_delta -= candles_moved as f32;
+
             // Update shared X-axis state
             let new_start = (chart.visible_candle_start as i32 + candles_moved).max(0) as usize;
             let spacing = right_spacing_candles(chart.visible_candle_count);

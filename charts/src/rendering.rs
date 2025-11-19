@@ -338,8 +338,29 @@ pub fn render_candlesticks(
                         }
                         updated_wicks.insert(i);
                     } else {
-                        // Return entity to pool if query failed
+                        // Entity from pool is invalid - return it and spawn new as fallback
                         pools.wicks.return_entity(entity, PooledEntityType::CandlestickWick);
+
+                        // Spawn new entity to replace the corrupted one
+                        let new_entity = commands
+                            .spawn((
+                                Sprite {
+                                    color: Color::srgb(0.5, 0.5, 0.5),
+                                    custom_size: Some(Vec2::new(1.0, wick_height)),
+                                    ..default()
+                                },
+                                Transform::from_translation(wick_center.extend(0.0)),
+                                CandlestickWick { candle_index: i },
+                                PooledEntity {
+                                    entity_type: PooledEntityType::CandlestickWick,
+                                    in_use: true,
+                                },
+                                PriceElement,
+                                PaneId::Price,
+                            ))
+                            .id();
+                        pools.wicks.add_entity(new_entity);
+                        spawned_count += 1;
                     }
                 } else {
                     // Pool exhausted - spawn new
@@ -408,8 +429,29 @@ pub fn render_candlesticks(
                         }
                         updated_bodies.insert(i);
                     } else {
-                        // Return entity to pool if query failed
+                        // Entity from pool is invalid - return it and spawn new as fallback
                         pools.bodies.return_entity(entity, PooledEntityType::CandlestickBody);
+
+                        // Spawn new entity to replace the corrupted one
+                        let new_entity = commands
+                            .spawn((
+                                Sprite {
+                                    color: body_color,
+                                    custom_size: Some(Vec2::new(body_width, body_height)),
+                                    ..default()
+                                },
+                                Transform::from_translation(body_center.extend(1.0)),
+                                CandlestickBody { candle_index: i },
+                                PooledEntity {
+                                    entity_type: PooledEntityType::CandlestickBody,
+                                    in_use: true,
+                                },
+                                PriceElement,
+                                PaneId::Price,
+                            ))
+                            .id();
+                        pools.bodies.add_entity(new_entity);
+                        spawned_count += 1;
                     }
                 } else {
                     // Pool exhausted - spawn new
@@ -520,8 +562,29 @@ pub fn render_candlesticks(
                         }
                         updated_ohlc.insert(i);
                     } else {
-                        // Return entity to pool if query failed
+                        // Entity from pool is invalid - return it and spawn new as fallback
                         pools.ohlc_lines.return_entity(entity, PooledEntityType::CandlestickOHLC);
+
+                        // Spawn new entity to replace the corrupted one
+                        let new_entity = commands
+                            .spawn((
+                                Sprite {
+                                    color,
+                                    custom_size: Some(Vec2::new(1.5, height)),
+                                    ..default()
+                                },
+                                Transform::from_translation(center.extend(0.0)),
+                                CandlestickOHLCLine { candle_index: i },
+                                PooledEntity {
+                                    entity_type: PooledEntityType::CandlestickOHLC,
+                                    in_use: true,
+                                },
+                                PriceElement,
+                                PaneId::Price,
+                            ))
+                            .id();
+                        pools.ohlc_lines.add_entity(new_entity);
+                        spawned_count += 1;
                     }
                 } else {
                     // Pool exhausted - spawn new
@@ -632,8 +695,29 @@ pub fn render_candlesticks(
                         }
                         updated_range.insert(i);
                     } else {
-                        // Return entity to pool if query failed
+                        // Entity from pool is invalid - return it and spawn new as fallback
                         pools.range_lines.return_entity(entity, PooledEntityType::CandlestickRange);
+
+                        // Spawn new entity to replace the corrupted one
+                        let new_entity = commands
+                            .spawn((
+                                Sprite {
+                                    color,
+                                    custom_size: Some(Vec2::new(0.5, height)),
+                                    ..default()
+                                },
+                                Transform::from_translation(center.extend(0.0)),
+                                CandlestickRangeLine { candle_index: i },
+                                PooledEntity {
+                                    entity_type: PooledEntityType::CandlestickRange,
+                                    in_use: true,
+                                },
+                                PriceElement,
+                                PaneId::Price,
+                            ))
+                            .id();
+                        pools.range_lines.add_entity(new_entity);
+                        spawned_count += 1;
                     }
                 } else {
                     // Pool exhausted - spawn new
@@ -950,8 +1034,29 @@ pub fn render_volume_bars(
                 }
                 updated_bars.insert(i);
             } else {
-                // Return entity to pool if query failed
+                // Entity from pool is invalid - return it and spawn new as fallback
                 pools.volume_bars.return_entity(entity, PooledEntityType::VolumeBar);
+
+                // Spawn new entity to replace the corrupted one
+                let new_entity = commands
+                    .spawn((
+                        Sprite {
+                            color: bar_color,
+                            custom_size: Some(Vec2::new(bar_width, bar_height)),
+                            ..default()
+                        },
+                        Transform::from_translation(bar_center.extend(0.0)),
+                        VolumeBar { candle_index: i },
+                        PooledEntity {
+                            entity_type: PooledEntityType::VolumeBar,
+                            in_use: true,
+                        },
+                        VolumeElement,
+                        PaneId::Volume,
+                    ))
+                    .id();
+                pools.volume_bars.add_entity(new_entity);
+                spawned_count += 1;
             }
         } else {
             // Pool exhausted - spawn new
