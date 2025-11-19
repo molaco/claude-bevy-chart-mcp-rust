@@ -248,10 +248,10 @@ pub fn render_candlesticks(
             // For example, with ratio=10:
             //   - idx=0 represents candles [0..10), centered at 4.5
             //   - idx=1 represents candles [10..20), centered at 14.5
-            // Using integer division, we position at the floor of the center:
-            //   - idx=0 → start + (0*10 + 10/2) = start + 5
-            //   - idx=1 → start + (1*10 + 10/2) = start + 15
-            start + (idx * level.ratio()) + (level.ratio() / 2)
+            // Using the center_offset() method, we position at the floor of the center:
+            //   - idx=0 → start + (0*10 + center_offset(10)) = start + 5
+            //   - idx=1 → start + (1*10 + center_offset(10)) = start + 15
+            start + (idx * level.ratio()) + level.center_offset()
         } else {
             index_mapping_offset + idx
         };
@@ -875,7 +875,7 @@ pub fn render_volume_bars(
         let i = if level != AggregationLevel::None {
             // Each aggregated candle represents a group of `ratio` source candles.
             // Position at the CENTER of the group for visual accuracy (see render_candlesticks for details).
-            start + (idx * level.ratio()) + (level.ratio() / 2)
+            start + (idx * level.ratio()) + level.center_offset()
         } else {
             index_mapping_offset + idx
         };

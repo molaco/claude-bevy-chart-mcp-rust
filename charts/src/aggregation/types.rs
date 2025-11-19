@@ -27,6 +27,20 @@ impl AggregationLevel {
         }
     }
 
+    /// Returns the center offset for positioning aggregated candles
+    /// This represents the middle point of the aggregated candle range
+    pub fn center_offset(&self) -> usize {
+        match self {
+            AggregationLevel::None => 0,          // 1:1, no centering needed
+            AggregationLevel::Low => 1,           // 2:1, center at index 1 (between 0 and 1)
+            AggregationLevel::Medium => 2,        // 5:1, center at index 2 (middle of 0-4)
+            AggregationLevel::High => 5,          // 10:1, center at index 5 (middle of 0-9)
+            AggregationLevel::VeryHigh => 10,     // 20:1, center at index 10 (middle of 0-19)
+            AggregationLevel::Extreme => 25,      // 50:1, center at index 25 (middle of 0-49)
+            AggregationLevel::Maximum => 50,      // 100:1, center at index 50 (middle of 0-99)
+        }
+    }
+
     /// Select aggregation level based on visible candles and max renderable
     pub fn select(visible_count: usize, max_renderable: usize) -> Self {
         if visible_count <= max_renderable {
