@@ -12,6 +12,7 @@ pub fn handle_mouse_input(
     mut chart: ResMut<Chart>,
     mut interaction: ResMut<InteractionState>,
     config: Res<CandlestickLODConfig>,
+    agg_state: Res<crate::aggregation::AggregationState>,
     mouse_button: Res<ButtonInput<MouseButton>>,
     mut mouse_wheel: MessageReader<MouseWheel>,
     mut window_query: Query<(&mut Window, &mut CursorIcon)>,
@@ -140,7 +141,7 @@ pub fn handle_mouse_input(
 
     if interaction.dragging && !chart.panes.is_empty() {
         let delta_x = interaction.mouse_pos.x - interaction.drag_start_pos.x;
-        let candle_width_px = chart.panes[0].space.candle_width_px;
+        let candle_width_px = chart.panes[0].space.effective_candle_width_px;
         let candles_moved = -(delta_x / candle_width_px) as i32;
 
         if candles_moved != 0 {
@@ -155,8 +156,14 @@ pub fn handle_mouse_input(
 
             // Recalculate cached values for all panes after pan
             let visible_candle_count = chart.visible_candle_count;
+            let agg_level = agg_state.current_level;
+            let aggregated_count = if agg_level != crate::aggregation::AggregationLevel::None {
+                visible_candle_count / agg_level.ratio()
+            } else {
+                visible_candle_count
+            };
             for pane in chart.panes.iter_mut() {
-                pane.space.recalculate_cache(visible_candle_count);
+                pane.space.recalculate_cache(visible_candle_count, agg_level, aggregated_count);
             }
 
             chart.needs_redraw = true;
@@ -195,8 +202,14 @@ pub fn handle_mouse_input(
 
             // Recalculate cached values for all panes after zoom
             let visible_candle_count = chart.visible_candle_count;
+            let agg_level = agg_state.current_level;
+            let aggregated_count = if agg_level != crate::aggregation::AggregationLevel::None {
+                visible_candle_count / agg_level.ratio()
+            } else {
+                visible_candle_count
+            };
             for pane in chart.panes.iter_mut() {
-                pane.space.recalculate_cache(visible_candle_count);
+                pane.space.recalculate_cache(visible_candle_count, agg_level, aggregated_count);
             }
 
             chart.needs_redraw = true;

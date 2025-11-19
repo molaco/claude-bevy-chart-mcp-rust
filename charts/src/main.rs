@@ -1094,8 +1094,12 @@ fn handle_timeframe_change(
                         }
                         _ => {}
                     }
-                    // Recalculate cached values after timeframe change
-                    pane.space.recalculate_cache(visible_count);
+                    // Recalculate cached values after timeframe change (no aggregation during timeframe change)
+                    pane.space.recalculate_cache(
+                        visible_count,
+                        crate::aggregation::AggregationLevel::None,
+                        visible_count
+                    );
                 }
 
                 // Trigger redraw

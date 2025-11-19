@@ -1,6 +1,7 @@
 use bevy::prelude::*;
 use duckdb::{params, Connection};
 use std::sync::{Arc, Mutex};
+use crate::aggregation::AggregationLevel;
 
 // ============================================================================
 // CORE DATA STRUCTURES
@@ -29,8 +30,9 @@ pub struct ChartSpace {
     pub viewport: Rect, // Where this pane is drawn on screen
 
     // Cached calculations (updated when bounds change)
-    pub candle_width_px: f32, // Width of each candle in pixels
-    pub price_scale: f32,     // Pixels per $1 price movement
+    pub candle_width_px: f32,           // Logical width (for non-aggregated contexts)
+    pub effective_candle_width_px: f32, // Effective width (for rendering with aggregation)
+    pub price_scale: f32,               // Pixels per $1 price movement
 }
 
 impl ChartSpace {
@@ -41,9 +43,10 @@ impl ChartSpace {
             price_padding: 0.05,
             viewport,
             candle_width_px: 0.0,
+            effective_candle_width_px: 0.0,
             price_scale: 0.0,
         };
-        space.recalculate_cache(visible_candle_count);
+        space.recalculate_cache(visible_candle_count, AggregationLevel::None, visible_candle_count);
         space
     }
 
@@ -155,7 +158,7 @@ impl ChartSpace {
         self.visible_price_min = (min_price - padding) as f32;
         self.visible_price_max = (max_price + padding) as f32;
 
-        self.recalculate_cache(visible_candle_count);
+        self.recalculate_cache(visible_candle_count, AggregationLevel::None, visible_candle_count);
     }
 
     /// Fit price bounds to visible candles AND indicator values (Option B)
@@ -208,7 +211,7 @@ impl ChartSpace {
         self.visible_price_min = (min_price - padding) as f32;
         self.visible_price_max = (max_price + padding) as f32;
 
-        self.recalculate_cache(visible_candle_count);
+        self.recalculate_cache(visible_candle_count, AggregationLevel::None, visible_candle_count);
     }
 
     /// Fit volume bounds to visible candles
@@ -241,22 +244,27 @@ impl ChartSpace {
         self.visible_price_min = 0.0;
         self.visible_price_max = (max_volume * volume_y_axis_padding as f64) as f32;
 
-        self.recalculate_cache(visible_candle_count);
+        self.recalculate_cache(visible_candle_count, AggregationLevel::None, visible_candle_count);
     }
 
     /// Recalculate cached values
-    pub fn recalculate_cache(&mut self, visible_candle_count: usize) {
-        let old_width = self.candle_width_px;
-        self.candle_width_px = self.viewport.width() / visible_candle_count as f32;
+    pub fn recalculate_cache(
+        &mut self,
+        visible_candle_count: usize,
+        aggregation_level: AggregationLevel,
+        aggregated_count: usize,
+    ) {
+        // Logical width (always based on visible_candle_count)
+        self.candle_width_px = self.viewport.width() / visible_candle_count.max(1) as f32;
 
-        println!(
-            "[DEBUG] ChartSpace::recalculate_cache - visible_count: {}, viewport_width: {:.1}, old_width: {:.3}px, new_width: {:.3}px",
-            visible_candle_count,
-            self.viewport.width(),
-            old_width,
-            self.candle_width_px
-        );
+        // Effective width (based on aggregated count when aggregation is active)
+        self.effective_candle_width_px = if aggregation_level != AggregationLevel::None {
+            self.viewport.width() / aggregated_count.max(1) as f32
+        } else {
+            self.candle_width_px // Same as logical when not aggregated
+        };
 
+        // Update price_scale
         let price_range = self.visible_price_max - self.visible_price_min;
         self.price_scale = if price_range > 0.0 {
             self.viewport.height() / price_range
@@ -344,8 +352,8 @@ pub fn calculate_pane_layouts(panes: &mut [Pane], total_area: Rect, visible_cand
             Vec2::new(total_area.max.x, pane_max_y),
         );
 
-        // Recalculate cached values
-        pane.space.recalculate_cache(visible_candle_count);
+        // Recalculate cached values (no aggregation in pane layout)
+        pane.space.recalculate_cache(visible_candle_count, AggregationLevel::None, visible_candle_count);
 
         // Move down for next pane, adding separator gap if not the last pane
         current_y = pane_min_y;
