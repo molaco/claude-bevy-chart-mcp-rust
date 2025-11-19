@@ -59,17 +59,43 @@ fn aggregate_chunk(chunk: &[Candle]) -> Candle {
 }
 
 /// Aggregate a range of source candles
+/// Uses globally aligned boundaries to ensure stable aggregation during panning
 pub fn aggregate_range(
     source: &[Candle],
     start: usize,
     count: usize,
     level: AggregationLevel,
 ) -> AggregatedCandles {
+    let ratio = level.ratio();
+
+    if ratio == 1 {
+        // No aggregation - return as-is
+        let end = (start + count).min(source.len());
+        let slice = &source[start..end];
+        return AggregatedCandles {
+            level,
+            candles: slice.to_vec(),
+            source_range: (start, end),
+        };
+    }
+
+    // Align to global boundaries to ensure consistent grouping regardless of pan position
+    // Example: with ratio=10, start=1003 aligns to 1000
+    // This ensures candles [1000-1009] always aggregate together
+    let aligned_start = (start / ratio) * ratio;
+
+    // Calculate end of visible range
     let end = (start + count).min(source.len());
-    let slice = &source[start..end];
+
+    // Align end boundary up to cover all visible candles
+    let aligned_end = ((end + ratio - 1) / ratio) * ratio;
+
+    // Aggregate from aligned boundaries
+    let slice_end = aligned_end.min(source.len());
+    let slice = &source[aligned_start..slice_end];
 
     let mut result = aggregate_candles(slice, level);
-    result.source_range = (start, end);
+    result.source_range = (aligned_start, slice_end);
     result
 }
 
