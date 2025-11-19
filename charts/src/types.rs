@@ -72,6 +72,37 @@ impl ChartSpace {
         Vec2::new(world_x, world_y)
     }
 
+    /// Map candle index and price to world coordinates with custom Y-axis bounds
+    ///
+    /// This method allows specifying custom min/max Y values for scaling,
+    /// useful when rendering with different Y-axis ranges than the pane's
+    /// visible_price_min/max (e.g., for volume bars with aggregated data).
+    pub fn to_world_with_y_range(
+        &self,
+        candle_index: usize,
+        value: f32,
+        visible_candle_start: usize,
+        visible_candle_count: usize,
+        y_min: f32,
+        y_max: f32,
+    ) -> Vec2 {
+        // Map candle index relative to visible range (same as to_world)
+        let candle_offset = candle_index.saturating_sub(visible_candle_start);
+        let x_percent = candle_offset as f32 / visible_candle_count as f32;
+        let world_x = self.viewport.min.x + x_percent * self.viewport.width();
+
+        // Map value to viewport using custom Y range
+        let y_range = y_max - y_min;
+        let y_percent = if y_range > 0.0 {
+            (value - y_min) / y_range
+        } else {
+            0.5
+        };
+        let world_y = self.viewport.min.y + y_percent * self.viewport.height();
+
+        Vec2::new(world_x, world_y)
+    }
+
     /// Map world coordinates to candle index and price
     pub fn from_world(
         &self,
@@ -186,6 +217,7 @@ impl ChartSpace {
         candles: &[Candle],
         visible_candle_start: usize,
         visible_candle_count: usize,
+        volume_y_axis_padding: f32,
     ) {
         if candles.is_empty() {
             return;
@@ -205,16 +237,26 @@ impl ChartSpace {
             .max_by(|a, b| a.partial_cmp(b).unwrap())
             .unwrap_or(1.0);
 
-        // Add 12% top padding so volume bars don't touch the pane ceiling
+        // Add top padding so volume bars don't touch the pane ceiling
         self.visible_price_min = 0.0;
-        self.visible_price_max = (max_volume * 1.12) as f32;
+        self.visible_price_max = (max_volume * volume_y_axis_padding as f64) as f32;
 
         self.recalculate_cache(visible_candle_count);
     }
 
     /// Recalculate cached values
     pub fn recalculate_cache(&mut self, visible_candle_count: usize) {
+        let old_width = self.candle_width_px;
         self.candle_width_px = self.viewport.width() / visible_candle_count as f32;
+
+        println!(
+            "[DEBUG] ChartSpace::recalculate_cache - visible_count: {}, viewport_width: {:.1}, old_width: {:.3}px, new_width: {:.3}px",
+            visible_candle_count,
+            self.viewport.width(),
+            old_width,
+            self.candle_width_px
+        );
+
         let price_range = self.visible_price_max - self.visible_price_min;
         self.price_scale = if price_range > 0.0 {
             self.viewport.height() / price_range
@@ -573,7 +615,7 @@ pub fn right_spacing_candles(visible_candle_count: usize) -> usize {
 }
 
 /// Update Y-axis bounds for all panes based on their type
-pub fn update_pane_bounds(chart: &mut Chart) {
+pub fn update_pane_bounds(chart: &mut Chart, volume_y_axis_padding: f32) {
     // Collect shared data to avoid borrow conflicts
     let candles = &chart.candles;
     let indicators = &chart.indicators;
@@ -593,7 +635,7 @@ pub fn update_pane_bounds(chart: &mut Chart) {
             }
             PaneType::Volume => {
                 pane.space
-                    .fit_volume_bounds(candles, visible_start, visible_count);
+                    .fit_volume_bounds(candles, visible_start, visible_count, volume_y_axis_padding);
             }
             PaneType::Indicator { .. } => {
                 // TODO: Handle indicators when implemented
@@ -927,6 +969,8 @@ pub struct CandlestickLODConfig {
     pub medium_detail_threshold: f32,
     /// Minimum candle width (px) to render volume bars
     pub volume_render_threshold: f32,
+    /// Y-axis padding multiplier for volume bars (e.g., 1.12 = 12% padding above max volume)
+    pub volume_y_axis_padding: f32,
 }
 
 impl Default for CandlestickLODConfig {
@@ -935,6 +979,7 @@ impl Default for CandlestickLODConfig {
             full_detail_threshold: 3.0,
             medium_detail_threshold: 1.0,
             volume_render_threshold: 0.5,
+            volume_y_axis_padding: 1.12,
         }
     }
 }

@@ -152,12 +152,58 @@ pub fn render_candlesticks(
     // Determine LOD level based on candle width
     // Use aggregated candle count for width calculation if aggregation is active
     let effective_candle_count = if level != AggregationLevel::None {
-        candles_to_render.len()
+        candles_to_render.len().max(1)
     } else {
-        chart.visible_candle_count
+        chart.visible_candle_count.max(1)
     };
     let candle_width_px = price_pane.space.viewport.width() / effective_candle_count as f32;
     let lod_level = calculate_lod_level(candle_width_px, &config);
+
+    // Check if aggregation level changed since last frame
+    // If it changed, return ALL entities to pool to force clean respawn
+    if level != agg_state.previous_level {
+        #[cfg(debug_assertions)]
+        println!(
+            "Aggregation level changed: {:?} -> {:?}, clearing entity pools",
+            agg_state.previous_level, level
+        );
+
+        // Return all wicks to pool
+        for (entity, _, _, _, mut visibility) in query_wicks.iter_mut() {
+            *visibility = Visibility::Hidden;
+            pools.wicks.return_entity(entity, PooledEntityType::CandlestickWick);
+            if let Ok(mut pooled) = pooled_query.get_mut(entity) {
+                pooled.in_use = false;
+            }
+        }
+
+        // Return all bodies to pool
+        for (entity, _, _, _, mut visibility) in query_bodies.iter_mut() {
+            *visibility = Visibility::Hidden;
+            pools.bodies.return_entity(entity, PooledEntityType::CandlestickBody);
+            if let Ok(mut pooled) = pooled_query.get_mut(entity) {
+                pooled.in_use = false;
+            }
+        }
+
+        // Return all OHLC lines to pool
+        for (entity, _, _, _, mut visibility) in query_ohlc.iter_mut() {
+            *visibility = Visibility::Hidden;
+            pools.ohlc_lines.return_entity(entity, PooledEntityType::CandlestickOHLC);
+            if let Ok(mut pooled) = pooled_query.get_mut(entity) {
+                pooled.in_use = false;
+            }
+        }
+
+        // Return all range lines to pool
+        for (entity, _, _, _, mut visibility) in query_range.iter_mut() {
+            *visibility = Visibility::Hidden;
+            pools.range_lines.return_entity(entity, PooledEntityType::CandlestickRange);
+            if let Ok(mut pooled) = pooled_query.get_mut(entity) {
+                pooled.in_use = false;
+            }
+        }
+    }
 
     // Collect existing entities by candle_index
     use std::collections::HashMap;
@@ -166,17 +212,21 @@ pub fn render_candlesticks(
     let mut existing_ohlc: HashMap<usize, Entity> = HashMap::new();
     let mut existing_range: HashMap<usize, Entity> = HashMap::new();
 
-    for (entity, wick, _, _, _) in query_wicks.iter() {
-        existing_wicks.insert(wick.candle_index, entity);
-    }
-    for (entity, body, _, _, _) in query_bodies.iter() {
-        existing_bodies.insert(body.candle_index, entity);
-    }
-    for (entity, ohlc, _, _, _) in query_ohlc.iter() {
-        existing_ohlc.insert(ohlc.candle_index, entity);
-    }
-    for (entity, range_line, _, _, _) in query_range.iter() {
-        existing_range.insert(range_line.candle_index, entity);
+    // Only collect existing entities if aggregation level hasn't changed
+    // If level changed, all entities were just cleared and have stale indices
+    if level == agg_state.previous_level {
+        for (entity, wick, _, _, _) in query_wicks.iter() {
+            existing_wicks.insert(wick.candle_index, entity);
+        }
+        for (entity, body, _, _, _) in query_bodies.iter() {
+            existing_bodies.insert(body.candle_index, entity);
+        }
+        for (entity, ohlc, _, _, _) in query_ohlc.iter() {
+            existing_ohlc.insert(ohlc.candle_index, entity);
+        }
+        for (entity, range_line, _, _, _) in query_range.iter() {
+            existing_range.insert(range_line.candle_index, entity);
+        }
     }
 
     // Track which entities we updated (to avoid despawning them)
@@ -192,7 +242,16 @@ pub fn render_candlesticks(
     for (idx, candle) in candles_to_render.iter().enumerate() {
         // Map aggregated index to original world space
         let i = if level != AggregationLevel::None {
-            start + (idx * level.ratio())  // Spread aggregated candles proportionally
+            // Each aggregated candle represents a group of `ratio` source candles.
+            // The aggregated candle's timestamp is from the first candle in the group,
+            // but we want to position it at the CENTER of the group for visual accuracy.
+            // For example, with ratio=10:
+            //   - idx=0 represents candles [0..10), centered at 4.5
+            //   - idx=1 represents candles [10..20), centered at 14.5
+            // Using integer division, we position at the floor of the center:
+            //   - idx=0 → start + (0*10 + 10/2) = start + 5
+            //   - idx=1 → start + (1*10 + 10/2) = start + 15
+            start + (idx * level.ratio()) + (level.ratio() / 2)
         } else {
             index_mapping_offset + idx
         };
@@ -733,6 +792,20 @@ pub fn render_volume_bars(
         AggregationLevel::None
     };
 
+    // If aggregation level changed, return ALL volume bars to pool
+    if level != agg_state.previous_level {
+        println!("Aggregation level changed for volume bars, clearing pool");
+
+        // Return all volume bars to pool
+        for (entity, _, _, _, mut visibility) in query.iter_mut() {
+            *visibility = Visibility::Hidden;
+            pools.volume_bars.return_entity(entity, PooledEntityType::VolumeBar);
+            if let Ok(mut pooled) = pooled_query.get_mut(entity) {
+                pooled.in_use = false;
+            }
+        }
+    }
+
     // Get aggregated data if needed (must live for entire function)
     let aggregated_data;
     let (candles_to_render, index_mapping_offset) = if level != AggregationLevel::None {
@@ -751,20 +824,14 @@ pub fn render_volume_bars(
         (&chart.candles[start..end], start)
     };
 
-    // Calculate max volume from aggregated data for proper Y-scaling
-    let max_aggregated_volume = candles_to_render
-        .iter()
-        .map(|c| c.volume as f32)
-        .fold(0.0f32, f32::max) * 1.12; // 12% padding
-
     let volume_pane = chart.panes.iter().find(|p| matches!(p.id, PaneId::Volume)).unwrap();
 
     // Check if candles are too small to render volume bars
     // Use aggregated candle count for width calculation if aggregation is active
     let effective_candle_count = if level != AggregationLevel::None {
-        candles_to_render.len()
+        candles_to_render.len().max(1)
     } else {
-        chart.visible_candle_count
+        chart.visible_candle_count.max(1)
     };
     let candle_width_px = price_pane.space.viewport.width() / effective_candle_count as f32;
 
@@ -780,12 +847,22 @@ pub fn render_volume_bars(
         return;
     }
 
+    // Calculate max volume from aggregated data for proper Y-scaling
+    let max_aggregated_volume = candles_to_render
+        .iter()
+        .map(|c| c.volume as f32)
+        .fold(0.0f32, f32::max) * config.volume_y_axis_padding;
+
     // Collect existing entities by candle_index
     use std::collections::{HashMap, HashSet};
     let mut existing_bars: HashMap<usize, Entity> = HashMap::new();
 
-    for (entity, bar, _, _, _) in query.iter() {
-        existing_bars.insert(bar.candle_index, entity);
+    // Only collect existing entities if aggregation level hasn't changed
+    // If level changed, all entities were just cleared and have stale indices
+    if level == agg_state.previous_level {
+        for (entity, bar, _, _, _) in query.iter() {
+            existing_bars.insert(bar.candle_index, entity);
+        }
     }
 
     // Track which entities we updated
@@ -796,31 +873,30 @@ pub fn render_volume_bars(
     for (idx, candle) in candles_to_render.iter().enumerate() {
         // Map aggregated index to original world space
         let i = if level != AggregationLevel::None {
-            start + (idx * level.ratio())  // Spread aggregated candles proportionally
+            // Each aggregated candle represents a group of `ratio` source candles.
+            // Position at the CENTER of the group for visual accuracy (see render_candlesticks for details).
+            start + (idx * level.ratio()) + (level.ratio() / 2)
         } else {
             index_mapping_offset + idx
         };
 
-        // Calculate positions using custom Y-scale for aggregated volumes
-        let candle_offset = i.saturating_sub(start);
-        let x_percent = candle_offset as f32 / chart.visible_candle_count as f32;
-        let world_x = volume_pane.space.viewport.min.x + x_percent * volume_pane.space.viewport.width();
-
-        // Use our calculated max_aggregated_volume instead of pane's bounds
-        let y_percent_bottom = 0.0;
-        let y_percent_top = if max_aggregated_volume > 0.0 {
-            (candle.volume as f32) / max_aggregated_volume
-        } else {
-            0.0
-        };
-
-        let bar_bottom = Vec2::new(
-            world_x,
-            volume_pane.space.viewport.min.y + y_percent_bottom * volume_pane.space.viewport.height(),
+        // Calculate positions using ChartSpace with custom Y-axis bounds for aggregated volumes
+        // Use max_aggregated_volume as the custom Y range (0.0 to max_aggregated_volume)
+        let bar_bottom = volume_pane.space.to_world_with_y_range(
+            i,
+            0.0,
+            chart.visible_candle_start,
+            chart.visible_candle_count,
+            0.0,
+            max_aggregated_volume,
         );
-        let bar_top = Vec2::new(
-            world_x,
-            volume_pane.space.viewport.min.y + y_percent_top * volume_pane.space.viewport.height(),
+        let bar_top = volume_pane.space.to_world_with_y_range(
+            i,
+            candle.volume as f32,
+            chart.visible_candle_start,
+            chart.visible_candle_count,
+            0.0,
+            max_aggregated_volume,
         );
 
         let bar_center = Vec2::new(
@@ -1073,6 +1149,7 @@ pub fn render_grid_and_axes(
     chart: Res<Chart>,
     grid: Res<ChartGrid>,
     axes: Res<ChartAxes>,
+    config: Res<CandlestickLODConfig>,
     query: Query<Entity, With<GridElement>>,
 ) {
     if !chart.needs_redraw {
@@ -1100,12 +1177,12 @@ pub fn render_grid_and_axes(
     for pane in &chart.panes {
         let viewport = &pane.space.viewport;
 
-        // For volume panes, calculate render height ratio (before 12% padding)
+        // For volume panes, calculate render height ratio (based on configured padding)
         let render_height_ratio = match pane.pane_type {
             PaneType::Volume => {
-                // visible_price_max = actual_max * 1.12
-                // Grid lines should only go up to actual_max / visible_price_max = 1/1.12
-                1.0 / 1.12
+                // visible_price_max = actual_max * volume_y_axis_padding
+                // Grid lines should only go up to actual_max / visible_price_max = 1/padding
+                1.0 / config.volume_y_axis_padding
             }
             _ => 1.0,
         };
@@ -1143,7 +1220,7 @@ pub fn render_grid_and_axes(
 
                 // Format based on pane type
                 let label_text = match pane.pane_type {
-                    PaneType::Volume => format_volume(value / 1.12),
+                    PaneType::Volume => format_volume(value / config.volume_y_axis_padding),
                     _ => format!("{:.2}", value),
                 };
 

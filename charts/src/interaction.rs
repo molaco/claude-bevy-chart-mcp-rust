@@ -11,6 +11,7 @@ use bevy::window::{CursorIcon, SystemCursorIcon};
 pub fn handle_mouse_input(
     mut chart: ResMut<Chart>,
     mut interaction: ResMut<InteractionState>,
+    config: Res<CandlestickLODConfig>,
     mouse_button: Res<ButtonInput<MouseButton>>,
     mut mouse_wheel: MessageReader<MouseWheel>,
     mut window_query: Query<(&mut Window, &mut CursorIcon)>,
@@ -111,7 +112,7 @@ pub fn handle_mouse_input(
             calculate_pane_layouts(&mut chart.panes, total_area, visible_candle_count);
 
             // Update Y-axis bounds
-            update_pane_bounds(&mut chart);
+            update_pane_bounds(&mut chart, config.volume_y_axis_padding);
 
             chart.needs_redraw = true;
         }
@@ -150,7 +151,13 @@ pub fn handle_mouse_input(
                 .min((chart.candles.len() + spacing).saturating_sub(chart.visible_candle_count));
 
             // Update Y-axis bounds for all panes
-            update_pane_bounds(&mut chart);
+            update_pane_bounds(&mut chart, config.volume_y_axis_padding);
+
+            // Recalculate cached values for all panes after pan
+            let visible_candle_count = chart.visible_candle_count;
+            for pane in chart.panes.iter_mut() {
+                pane.space.recalculate_cache(visible_candle_count);
+            }
 
             chart.needs_redraw = true;
             interaction.drag_start_pos = interaction.mouse_pos;
@@ -184,7 +191,13 @@ pub fn handle_mouse_input(
             chart.visible_candle_count = new_count;
 
             // Update Y-axis bounds for all panes
-            update_pane_bounds(&mut chart);
+            update_pane_bounds(&mut chart, config.volume_y_axis_padding);
+
+            // Recalculate cached values for all panes after zoom
+            let visible_candle_count = chart.visible_candle_count;
+            for pane in chart.panes.iter_mut() {
+                pane.space.recalculate_cache(visible_candle_count);
+            }
 
             chart.needs_redraw = true;
 
@@ -324,6 +337,7 @@ pub fn check_lazy_load(mut chart: ResMut<Chart>, db: Res<ChartDatabase>) {
 pub fn toggle_volume_pane(
     keys: Res<ButtonInput<KeyCode>>,
     focus: Res<FocusState>,
+    config: Res<CandlestickLODConfig>,
     mut toggle_state: ResMut<VolumeToggleState>,
     mut chart: ResMut<Chart>,
 ) {
@@ -383,7 +397,7 @@ pub fn toggle_volume_pane(
         calculate_pane_layouts(&mut chart.panes, total_area, visible_candle_count);
 
         // Update Y-axis bounds for all panes
-        update_pane_bounds(&mut chart);
+        update_pane_bounds(&mut chart, config.volume_y_axis_padding);
 
         // Trigger redraw
         chart.needs_redraw = true;
@@ -395,6 +409,7 @@ pub fn toggle_volume_pane(
 pub fn toggle_sma_indicators(
     keys: Res<ButtonInput<KeyCode>>,
     focus: Res<FocusState>,
+    config: Res<CandlestickLODConfig>,
     mut chart: ResMut<Chart>,
 ) {
     // Only process if chart has focus
@@ -462,7 +477,7 @@ pub fn toggle_sma_indicators(
     // If any toggle occurred, update bounds and trigger redraw
     if toggled {
         // Update Y-axis bounds (will respect new visibility state)
-        update_pane_bounds(&mut chart);
+        update_pane_bounds(&mut chart, config.volume_y_axis_padding);
 
         // Trigger redraw
         chart.needs_redraw = true;

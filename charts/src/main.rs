@@ -576,7 +576,7 @@ fn setup(
             }
             PaneType::Volume => {
                 pane.space
-                    .fit_volume_bounds(&candles, visible_candle_start, visible_candle_count);
+                    .fit_volume_bounds(&candles, visible_candle_start, visible_candle_count, CandlestickLODConfig::default().volume_y_axis_padding);
             }
             _ => {}
         }
@@ -1020,6 +1020,7 @@ fn handle_timeframe_keyboard(
 fn handle_timeframe_change(
     mut chart: ResMut<Chart>,
     mut timeframe_mgr: ResMut<TimeframeManager>,
+    config: Res<CandlestickLODConfig>,
     db: Res<ChartDatabase>,
     mut change_events: MessageReader<TimeframeChangeRequest>,
     args: Res<ChartArgs>,
@@ -1088,10 +1089,13 @@ fn handle_timeframe_change(
                                 &candles_clone,
                                 visible_start,
                                 visible_count,
+                                config.volume_y_axis_padding,
                             );
                         }
                         _ => {}
                     }
+                    // Recalculate cached values after timeframe change
+                    pane.space.recalculate_cache(visible_count);
                 }
 
                 // Trigger redraw

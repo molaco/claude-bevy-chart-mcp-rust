@@ -6,6 +6,7 @@ const LEVEL_CHANGE_COOLDOWN_MS: u128 = 200;
 #[derive(Resource)]
 pub struct AggregationState {
     pub current_level: AggregationLevel,
+    pub previous_level: AggregationLevel,
     pub level_change_cooldown: Option<std::time::Instant>,
 }
 
@@ -13,6 +14,7 @@ impl Default for AggregationState {
     fn default() -> Self {
         Self {
             current_level: AggregationLevel::None,
+            previous_level: AggregationLevel::None,
             level_change_cooldown: None,
         }
     }
@@ -31,7 +33,8 @@ impl AggregationState {
             }
         }
 
-        // Allow level change
+        // Allow level change - track previous level before updating
+        self.previous_level = self.current_level;
         self.current_level = new_level;
         self.level_change_cooldown = Some(std::time::Instant::now());
         true
