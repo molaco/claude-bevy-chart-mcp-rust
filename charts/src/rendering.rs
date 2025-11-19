@@ -906,12 +906,12 @@ pub fn render_volume_bars(
         let bar_height = (bar_top.y - bar_bottom.y).abs().max(1.0);
 
         // Determine bar width based on candle size (LOD)
-        let bar_width = if price_pane.space.candle_width_px >= 2.0 {
+        let bar_width = if candle_width_px >= 2.0 {
             // Full detail: 70% of candle width
-            volume_pane.space.candle_width_px * 0.7
+            candle_width_px * 0.7
         } else {
             // Thin detail: 30% of candle width when zoomed out
-            volume_pane.space.candle_width_px * 0.3
+            candle_width_px * 0.3
         };
 
         // Color based on candle direction
