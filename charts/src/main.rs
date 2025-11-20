@@ -213,7 +213,7 @@ fn shrink_entity_pools(
         return;
     }
 
-    let target_size = config.initial_pool_size;
+    let target_size = PoolSizeConfig::default().initial_pool_size;
 
     // Shrink each pool
     shrink_pool(
@@ -301,6 +301,45 @@ fn shrink_pool(
     }
 }
 
+/// Discover newly spawned entities and add them to pools
+/// Runs after spawn commands have been applied, so entities actually exist
+fn discover_and_pool_entities(
+    query: Query<(Entity, &PendingPoolEntry)>,
+    mut pools: ResMut<EntityPools>,
+    config: Res<EntityPoolConfig>,
+    chart: Res<Chart>,
+    mut commands: Commands,
+) {
+    for (entity, pending) in query.iter() {
+        let pool_config = config.for_timeframe(&chart.timeframe);
+        let max_size = pool_config.max_pool_size;
+
+        let added = match pending.entity_type {
+            PooledEntityType::CandlestickWick => {
+                pools.wicks.try_add_entity(entity, max_size)
+            }
+            PooledEntityType::CandlestickBody => {
+                pools.bodies.try_add_entity(entity, max_size)
+            }
+            PooledEntityType::CandlestickOHLC => {
+                pools.ohlc_lines.try_add_entity(entity, max_size)
+            }
+            PooledEntityType::CandlestickRange => {
+                pools.range_lines.try_add_entity(entity, max_size)
+            }
+            PooledEntityType::VolumeBar => {
+                pools.volume_bars.try_add_entity(entity, max_size)
+            }
+        };
+
+        // Remove marker component (cleanup)
+        if added {
+            commands.entity(entity).remove::<PendingPoolEntry>();
+        }
+        // If not added (pool full), marker stays and we retry next frame
+    }
+}
+
 // ============================================================================
 // MAIN
 // ============================================================================
@@ -340,6 +379,7 @@ fn main() {
         .insert_resource(args) // Inject CLI args as a resource
         .init_resource::<FocusState>()
         .insert_resource(EntityPoolConfig::default())
+        .insert_resource(ZoomLimitConfig::default())
         .add_message::<TimeframeChangeRequest>()
         .add_systems(Startup, ui_layout::setup_split_layout)
         .add_systems(Startup, setup)
@@ -384,6 +424,7 @@ fn main() {
                 render_candlesticks,
                 render_moving_averages,
                 render_volume_bars,
+                discover_and_pool_entities,
                 reset_redraw_flag,
             )
                 .chain()
@@ -656,7 +697,8 @@ fn init_entity_pools(mut commands: Commands, config: Res<EntityPoolConfig>) {
     let mut pools = EntityPools::new();
 
     // Pre-allocate entities for each pool
-    for i in 0..config.initial_pool_size {
+    let pool_config = PoolSizeConfig::default();
+    for i in 0..pool_config.initial_pool_size {
         // Wick pool
         let wick_entity = commands
             .spawn((
@@ -775,7 +817,7 @@ fn init_entity_pools(mut commands: Commands, config: Res<EntityPoolConfig>) {
 
     println!(
         "Initialized entity pools: {} entities per type",
-        config.initial_pool_size
+        pool_config.initial_pool_size
     );
 
     commands.insert_resource(pools);
@@ -955,11 +997,16 @@ fn setup_timeframe_label(mut commands: Commands, args: Res<ChartArgs>) {
 /// Update timeframe label when timeframe changes
 fn update_timeframe_label(
     timeframe_mgr: Res<TimeframeManager>,
+    chart: Res<Chart>,
     mut query: Query<&mut Text, With<TimeframeText>>,
 ) {
-    if timeframe_mgr.is_changed() {
+    if timeframe_mgr.is_changed() || chart.is_changed() {
         for mut text in &mut query {
-            text.0 = format!("Timeframe: {}", timeframe_mgr.current_timeframe);
+            text.0 = format!(
+                "Timeframe: {}\nCandles: {}",
+                timeframe_mgr.current_timeframe,
+                chart.visible_candle_count
+            );
         }
     }
 }

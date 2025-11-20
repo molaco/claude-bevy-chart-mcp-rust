@@ -682,7 +682,7 @@ This creates a **silent failure loop**:
 
 #### Fix Plan
 
-**✅ IMPLEMENTED** - Add fallback spawn when pool entity is invalid:
+**✅ IMPLEMENTED** - Add fallback spawn when pool entity is invalid (with performance fix):
 
 ```rust
 } else if let Some(entity) = pools.wicks.get() {
@@ -693,8 +693,11 @@ This creates a **silent failure loop**:
         ...
         updated_wicks.insert(i);
     } else {
-        // Entity from pool is invalid - return it and spawn new as fallback
-        pools.wicks.return_entity(entity, PooledEntityType::CandlestickWick);
+        // Entity from pool is invalid - don't return it, just spawn new as fallback
+        // IMPORTANT: Don't call return_entity() here - entity already removed from
+        // 'available' by get() call. Returning it would create an infinite loop where
+        // the same invalid entity is pulled and returned every frame, spawning 1000s
+        // of duplicate entities and causing severe performance degradation.
 
         // Spawn new entity to replace the corrupted one
         let new_entity = commands
@@ -723,13 +726,16 @@ This creates a **silent failure loop**:
 **Implementation includes:**
 - Fixed all 5 entity pools: wicks, bodies, OHLC lines, range lines, volume bars
 - Fallback spawn logic ensures correct entity count
-- Invalid entities removed from pool and replaced
+- Invalid entities naturally purged (not returned to pool to prevent infinite loops)
+- Performance optimized: no entity spawn storms during panning
 
 #### Validation
 - [x] All required candles/bars rendered (100% coverage)
 - [x] No pool exhaustion warnings (tested with 5500+ candles → 1100 aggregated)
 - [x] Build succeeds without errors
 - [x] Pool reuse rate maintained while ensuring completeness
+- [x] Panning performance: smooth at all zoom levels (no entity spawn storms)
+- [x] Invalid entities naturally purged without infinite loop recycling
 
 ---
 
@@ -1089,7 +1095,8 @@ charts/src/main.rs           - System setup (possibly)
    - Fixed Issue #13: Pool exhaustion on invalid entities
    - Added fallback spawn logic to all 5 entity pools (wicks, bodies, OHLC, range, volume)
    - Invalid pool entities now trigger replacement spawn instead of silent failure
-   - Result: 100% entity coverage, no missing candles/bars during zoom
+   - Performance fix: invalid entities purged (not recycled) to prevent spawn storms
+   - Result: 100% entity coverage, no missing candles/bars, smooth panning performance
 
 ### Before vs After
 
@@ -1125,7 +1132,7 @@ The zoom system is now **fully functional** with all critical and medium-severit
 
 ---
 
-**Document Version:** 2.3 (Updated)
-**Last Updated:** 2025-11-19 (Issues #8 and #13 implemented)
+**Document Version:** 2.4 (Updated)
+**Last Updated:** 2025-11-19 (Issues #8 and #13 implemented with performance fix)
 **Author:** Claude Code Review System
 **Status:** ✅ Nearly Complete (11/13 issues fixed, all critical + high + medium-severity items done)

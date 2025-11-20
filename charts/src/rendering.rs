@@ -159,9 +159,8 @@ pub fn render_candlesticks(
     let candle_width_px = price_pane.space.viewport.width() / effective_candle_count as f32;
     let lod_level = calculate_lod_level(candle_width_px, &config);
 
-    // Check if aggregation level changed since last frame
-    // If it changed, return ALL entities to pool to force clean respawn
-    if level != agg_state.previous_level {
+    // Track if we cleared pools this frame
+    let pools_just_cleared = if level != agg_state.previous_level {
         #[cfg(debug_assertions)]
         println!(
             "Aggregation level changed: {:?} -> {:?}, clearing entity pools",
@@ -206,7 +205,10 @@ pub fn render_candlesticks(
 
         // Update previous_level to prevent detecting this as a change on next frame
         agg_state.previous_level = level;
-    }
+        true  // Pools were cleared
+    } else {
+        false  // No clearing happened
+    };
 
     // Collect existing entities by candle_index
     use std::collections::HashMap;
@@ -217,7 +219,7 @@ pub fn render_candlesticks(
 
     // Only collect existing entities if aggregation level hasn't changed
     // If level changed, all entities were just cleared and have stale indices
-    if level == agg_state.previous_level {
+    if !pools_just_cleared {
         for (entity, wick, _, _, _) in query_wicks.iter() {
             existing_wicks.insert(wick.candle_index, entity);
         }
@@ -242,6 +244,18 @@ pub fn render_candlesticks(
     // Counters for debug output
     let mut spawned_count = 0;
 
+    // Track rendering operations for gap detection
+    #[cfg(debug_assertions)]
+    let mut rendered_indices = Vec::new();
+    #[cfg(debug_assertions)]
+    let mut pool_get_success = 0;
+    #[cfg(debug_assertions)]
+    let mut pool_get_failed_query = 0;
+    #[cfg(debug_assertions)]
+    let mut pool_exhausted = 0;
+    #[cfg(debug_assertions)]
+    let mut entity_reused = 0;
+
     // Process each visible candle based on LOD level
     for (idx, candle) in candles_to_render.iter().enumerate() {
         // Map aggregated index to original world space
@@ -260,6 +274,9 @@ pub fn render_candlesticks(
         } else {
             index_mapping_offset + idx
         };
+
+        #[cfg(debug_assertions)]
+        rendered_indices.push(i);
 
         match lod_level {
             CandleLODLevel::Full => {
@@ -317,6 +334,9 @@ pub fn render_candlesticks(
 
                 // UPDATE or GET FROM POOL wick entity
                 if let Some(&entity) = existing_wicks.get(&i) {
+                    #[cfg(debug_assertions)]
+                    { entity_reused += 1; }
+
                     if let Ok((_, _, mut transform, mut sprite, mut visibility)) =
                         query_wicks.get_mut(entity)
                     {
@@ -328,6 +348,8 @@ pub fn render_candlesticks(
                     }
                     updated_wicks.insert(entity);
                 } else if let Some(entity) = pools.wicks.get() {
+                    #[cfg(debug_assertions)]
+                    { pool_get_success += 1; }
                     // Reuse from pool
                     if let Ok((_, mut wick, mut transform, mut sprite, mut visibility)) =
                         query_wicks.get_mut(entity)
@@ -343,10 +365,15 @@ pub fn render_candlesticks(
                         }
                         updated_wicks.insert(entity);
                     } else {
-                        // Entity from pool is invalid - don't return it, just spawn new as fallback
-                        // (Entity already removed from 'available' by get() call, will be naturally purged)
+                        #[cfg(debug_assertions)]
+                        { pool_get_failed_query += 1; }
+
+                        // Entity from pool is invalid - remove it permanently and spawn new as fallback
+                        pools.wicks.remove_invalid(entity);
 
                         // Spawn new entity to replace the corrupted one
+                        // NOTE: Don't add to pool yet - entity doesn't exist until next frame!
+                        // It will be auto-discovered when needed.
                         let new_entity = commands
                             .spawn((
                                 Sprite {
@@ -360,16 +387,23 @@ pub fn render_candlesticks(
                                     entity_type: PooledEntityType::CandlestickWick,
                                     in_use: true,
                                 },
+                                PendingPoolEntry {
+                                    entity_type: PooledEntityType::CandlestickWick,
+                                },
                                 PriceElement,
                                 PaneId::Price,
                             ))
                             .id();
-                        pools.wicks.add_entity(new_entity);
+                        // pools.wicks.add_entity(new_entity);  // DON'T ADD - causes pool corruption!
                         updated_wicks.insert(new_entity);
                         spawned_count += 1;
                     }
                 } else {
+                    #[cfg(debug_assertions)]
+                    { pool_exhausted += 1; }
+
                     // Pool exhausted - spawn new
+                    // NOTE: Don't add to pool yet - entity doesn't exist until next frame!
                     let new_entity = commands
                         .spawn((
                             Sprite {
@@ -383,11 +417,14 @@ pub fn render_candlesticks(
                                 entity_type: PooledEntityType::CandlestickWick,
                                 in_use: true,
                             },
+                            PendingPoolEntry {
+                                entity_type: PooledEntityType::CandlestickWick,
+                            },
                             PriceElement,
                             PaneId::Price,
                         ))
                         .id();
-                    pools.wicks.add_entity(new_entity);
+                    // pools.wicks.add_entity(new_entity);  // DON'T ADD - causes pool corruption!
                     updated_wicks.insert(new_entity);
                     spawned_count += 1;
                 }
@@ -439,8 +476,8 @@ pub fn render_candlesticks(
                         }
                         updated_bodies.insert(entity);
                     } else {
-                        // Entity from pool is invalid - don't return it, just spawn new as fallback
-                        // (Entity already removed from 'available' by get() call, will be naturally purged)
+                        // Entity from pool is invalid - remove it permanently and spawn new as fallback
+                        pools.bodies.remove_invalid(entity);
 
                         // Spawn new entity to replace the corrupted one
                         let new_entity = commands
@@ -456,11 +493,14 @@ pub fn render_candlesticks(
                                     entity_type: PooledEntityType::CandlestickBody,
                                     in_use: true,
                                 },
+                                PendingPoolEntry {
+                                    entity_type: PooledEntityType::CandlestickBody,
+                                },
                                 PriceElement,
                                 PaneId::Price,
                             ))
                             .id();
-                        pools.bodies.add_entity(new_entity);
+                        // pools.bodies.add_entity(new_entity);  // DON'T ADD - causes pool corruption!
                         updated_bodies.insert(new_entity);
                         spawned_count += 1;
                     }
@@ -479,11 +519,14 @@ pub fn render_candlesticks(
                                 entity_type: PooledEntityType::CandlestickBody,
                                 in_use: true,
                             },
+                            PendingPoolEntry {
+                                entity_type: PooledEntityType::CandlestickBody,
+                            },
                             PriceElement,
                             PaneId::Price,
                         ))
                         .id();
-                    pools.bodies.add_entity(new_entity);
+                    // pools.bodies.add_entity(new_entity);  // DON'T ADD - causes pool corruption!
                     updated_bodies.insert(new_entity);
                     spawned_count += 1;
                 }
@@ -546,6 +589,9 @@ pub fn render_candlesticks(
 
                 // UPDATE or GET FROM POOL OHLC line entity
                 if let Some(&entity) = existing_ohlc.get(&i) {
+                    #[cfg(debug_assertions)]
+                    { entity_reused += 1; }
+
                     if let Ok((_, _, mut transform, mut sprite, mut visibility)) =
                         query_ohlc.get_mut(entity)
                     {
@@ -561,6 +607,9 @@ pub fn render_candlesticks(
                     }
                     updated_ohlc.insert(entity);
                 } else if let Some(entity) = pools.ohlc_lines.get() {
+                    #[cfg(debug_assertions)]
+                    { pool_get_success += 1; }
+
                     // Reuse from pool
                     if let Ok((_, mut ohlc, mut transform, mut sprite, mut visibility)) =
                         query_ohlc.get_mut(entity)
@@ -577,8 +626,11 @@ pub fn render_candlesticks(
                         }
                         updated_ohlc.insert(entity);
                     } else {
-                        // Entity from pool is invalid - don't return it, just spawn new as fallback
-                        // (Entity already removed from 'available' by get() call, will be naturally purged)
+                        #[cfg(debug_assertions)]
+                        { pool_get_failed_query += 1; }
+
+                        // Entity from pool is invalid - remove it permanently and spawn new as fallback
+                        pools.ohlc_lines.remove_invalid(entity);
 
                         // Spawn new entity to replace the corrupted one
                         let new_entity = commands
@@ -594,15 +646,21 @@ pub fn render_candlesticks(
                                     entity_type: PooledEntityType::CandlestickOHLC,
                                     in_use: true,
                                 },
+                                PendingPoolEntry {
+                                    entity_type: PooledEntityType::CandlestickOHLC,
+                                },
                                 PriceElement,
                                 PaneId::Price,
                             ))
                             .id();
-                        pools.ohlc_lines.add_entity(new_entity);
+                        // pools.ohlc_lines.add_entity(new_entity);  // DON'T ADD - causes pool corruption!
                         updated_ohlc.insert(new_entity);
                         spawned_count += 1;
                     }
                 } else {
+                    #[cfg(debug_assertions)]
+                    { pool_exhausted += 1; }
+
                     // Pool exhausted - spawn new
                     let new_entity = commands
                         .spawn((
@@ -617,11 +675,14 @@ pub fn render_candlesticks(
                                 entity_type: PooledEntityType::CandlestickOHLC,
                                 in_use: true,
                             },
+                            PendingPoolEntry {
+                                entity_type: PooledEntityType::CandlestickOHLC,
+                            },
                             PriceElement,
                             PaneId::Price,
                         ))
                         .id();
-                    pools.ohlc_lines.add_entity(new_entity);
+                    // pools.ohlc_lines.add_entity(new_entity);  // DON'T ADD - causes pool corruption!
                     updated_ohlc.insert(new_entity);
                     spawned_count += 1;
                 }
@@ -684,6 +745,9 @@ pub fn render_candlesticks(
 
                 // UPDATE or GET FROM POOL range line entity
                 if let Some(&entity) = existing_range.get(&i) {
+                    #[cfg(debug_assertions)]
+                    { entity_reused += 1; }
+
                     if let Ok((_, _, mut transform, mut sprite, mut visibility)) =
                         query_range.get_mut(entity)
                     {
@@ -699,6 +763,9 @@ pub fn render_candlesticks(
                     }
                     updated_range.insert(entity);
                 } else if let Some(entity) = pools.range_lines.get() {
+                    #[cfg(debug_assertions)]
+                    { pool_get_success += 1; }
+
                     // Reuse from pool
                     if let Ok((_, mut range, mut transform, mut sprite, mut visibility)) =
                         query_range.get_mut(entity)
@@ -715,8 +782,11 @@ pub fn render_candlesticks(
                         }
                         updated_range.insert(entity);
                     } else {
-                        // Entity from pool is invalid - don't return it, just spawn new as fallback
-                        // (Entity already removed from 'available' by get() call, will be naturally purged)
+                        #[cfg(debug_assertions)]
+                        { pool_get_failed_query += 1; }
+
+                        // Entity from pool is invalid - remove it permanently and spawn new as fallback
+                        pools.range_lines.remove_invalid(entity);
 
                         // Spawn new entity to replace the corrupted one
                         let new_entity = commands
@@ -732,15 +802,21 @@ pub fn render_candlesticks(
                                     entity_type: PooledEntityType::CandlestickRange,
                                     in_use: true,
                                 },
+                                PendingPoolEntry {
+                                    entity_type: PooledEntityType::CandlestickRange,
+                                },
                                 PriceElement,
                                 PaneId::Price,
                             ))
                             .id();
-                        pools.range_lines.add_entity(new_entity);
+                        // pools.range_lines.add_entity(new_entity);  // DON'T ADD - causes pool corruption!
                         updated_range.insert(new_entity);
                         spawned_count += 1;
                     }
                 } else {
+                    #[cfg(debug_assertions)]
+                    { pool_exhausted += 1; }
+
                     // Pool exhausted - spawn new
                     let new_entity = commands
                         .spawn((
@@ -755,11 +831,14 @@ pub fn render_candlesticks(
                                 entity_type: PooledEntityType::CandlestickRange,
                                 in_use: true,
                             },
+                            PendingPoolEntry {
+                                entity_type: PooledEntityType::CandlestickRange,
+                            },
                             PriceElement,
                             PaneId::Price,
                         ))
                         .id();
-                    pools.range_lines.add_entity(new_entity);
+                    // pools.range_lines.add_entity(new_entity);  // DON'T ADD - causes pool corruption!
                     updated_range.insert(new_entity);
                     spawned_count += 1;
                 }
@@ -818,7 +897,7 @@ pub fn render_candlesticks(
         let (wick_total, wick_avail) = pools.wicks.stats();
         let (body_total, body_avail) = pools.bodies.stats();
 
-        println!(
+        let mut log_msg = format!(
             "AGG: {:?} ({}:1) | Rendered: {}/{} | Cache: {:.1}% hit ({}/{}) | Pools: W:{}/{} B:{}/{}",
             level,
             level.ratio(),
@@ -832,6 +911,57 @@ pub fn render_candlesticks(
             body_total - body_avail,
             body_total,
         );
+
+        if pools_just_cleared {
+            log_msg.push_str(" | POOLS CLEARED");
+        }
+        if spawned_count > 0 {
+            log_msg.push_str(&format!(" | Spawned: {}", spawned_count));
+        }
+        if hidden_count > 0 {
+            log_msg.push_str(&format!(" | Hidden: {}", hidden_count));
+        }
+        if level != AggregationLevel::None {
+            log_msg.push_str(&format!(" | Aligned: [{}..{}]", aligned_start, aligned_start + candles_to_render.len() * level.ratio()));
+        }
+
+        println!("{}", log_msg);
+
+        // Detailed entity lifecycle logging
+        println!(
+            "  Entity Ops: Reused={} | PoolOK={} | PoolFailed={} | PoolEmpty={} | Total={}",
+            entity_reused,
+            pool_get_success,
+            pool_get_failed_query,
+            pool_exhausted,
+            entity_reused + pool_get_success + pool_get_failed_query + pool_exhausted
+        );
+
+        // Gap detection: check for missing indices in rendered sequence
+        if !rendered_indices.is_empty() {
+            rendered_indices.sort_unstable();
+            let mut gaps = Vec::new();
+            let expected_step = if level != AggregationLevel::None {
+                level.ratio()
+            } else {
+                1
+            };
+
+            for window in rendered_indices.windows(2) {
+                let expected_next = window[0] + expected_step;
+                if window[1] != expected_next {
+                    gaps.push(format!("[{}..{}]", expected_next, window[1]));
+                }
+            }
+
+            if !gaps.is_empty() {
+                println!("  ⚠️  INDEX GAPS DETECTED: {}", gaps.join(", "));
+                println!("      Rendered indices: {:?}", &rendered_indices[0..rendered_indices.len().min(10)]);
+                if rendered_indices.len() > 10 {
+                    println!("      ... and {} more", rendered_indices.len() - 10);
+                }
+            }
+        }
     }
 }
 
@@ -891,8 +1021,11 @@ pub fn render_volume_bars(
         AggregationLevel::None
     };
 
-    // If aggregation level changed, return ALL volume bars to pool
-    if level != agg_state.previous_level {
+    // Track if we cleared pools this frame
+    // NOTE: Do NOT update agg_state.previous_level here - that's done in render_candlesticks
+    // to avoid race conditions between the two systems
+    let pools_just_cleared = if level != agg_state.previous_level {
+        #[cfg(debug_assertions)]
         println!("Aggregation level changed for volume bars, clearing pool");
 
         // Return all volume bars to pool
@@ -904,9 +1037,10 @@ pub fn render_volume_bars(
             }
         }
 
-        // Update previous_level to prevent detecting this as a change on next frame
-        agg_state.previous_level = level;
-    }
+        true  // Pools were cleared
+    } else {
+        false  // No clearing happened
+    };
 
     // Get aggregated data if needed (must live for entire function)
     let aggregated_data;
@@ -961,7 +1095,7 @@ pub fn render_volume_bars(
 
     // Only collect existing entities if aggregation level hasn't changed
     // If level changed, all entities were just cleared and have stale indices
-    if level == agg_state.previous_level {
+    if !pools_just_cleared {
         for (entity, bar, _, _, _) in query.iter() {
             existing_bars.insert(bar.candle_index, entity);
         }
@@ -1057,8 +1191,8 @@ pub fn render_volume_bars(
                 }
                 updated_bars.insert(entity);
             } else {
-                // Entity from pool is invalid - don't return it, just spawn new as fallback
-                // (Entity already removed from 'available' by get() call, will be naturally purged)
+                // Entity from pool is invalid - remove it permanently and spawn new as fallback
+                pools.volume_bars.remove_invalid(entity);
 
                 // Spawn new entity to replace the corrupted one
                 let new_entity = commands
@@ -1074,16 +1208,20 @@ pub fn render_volume_bars(
                             entity_type: PooledEntityType::VolumeBar,
                             in_use: true,
                         },
+                        PendingPoolEntry {
+                            entity_type: PooledEntityType::VolumeBar,
+                        },
                         VolumeElement,
                         PaneId::Volume,
                     ))
                     .id();
-                pools.volume_bars.add_entity(new_entity);
+                // pools.volume_bars.add_entity(new_entity);  // DON'T ADD - causes pool corruption!
                 updated_bars.insert(new_entity);
                 spawned_count += 1;
             }
         } else {
             // Pool exhausted - spawn new
+            // NOTE: Don't add to pool yet - entity doesn't exist until next frame!
             let new_entity = commands
                 .spawn((
                     Sprite {
@@ -1097,11 +1235,14 @@ pub fn render_volume_bars(
                         entity_type: PooledEntityType::VolumeBar,
                         in_use: true,
                     },
+                    PendingPoolEntry {
+                        entity_type: PooledEntityType::VolumeBar,
+                    },
                     VolumeElement,
                     PaneId::Volume,
                 ))
                 .id();
-            pools.volume_bars.add_entity(new_entity);
+            // pools.volume_bars.add_entity(new_entity);  // DON'T ADD - causes pool corruption!
             updated_bars.insert(new_entity);
             spawned_count += 1;
         }
@@ -1124,16 +1265,30 @@ pub fn render_volume_bars(
     #[cfg(debug_assertions)]
     {
         let (vol_total, vol_avail) = pools.volume_bars.stats();
-        println!(
-            "Rendered {} volume bars (indices {}-{}), updated: {}, spawned: {}, hidden: {}",
+        let mut log_msg = format!(
+            "VOL: Rendered {} bars (indices {}-{}) | Updated: {} | Spawned: {} | Hidden: {} | Pool: {}/{}",
             end - start,
             start,
             end - 1,
             updated_bars.len(),
             spawned_count,
-            hidden_count
+            hidden_count,
+            vol_total - vol_avail,
+            vol_total
         );
-        println!("Volume pool stats: {}/{}", vol_avail, vol_total);
+
+        if pools_just_cleared {
+            log_msg.push_str(" | POOLS CLEARED");
+        }
+        if level != AggregationLevel::None {
+            log_msg.push_str(&format!(" | AGG: {:?} ({}:1) | Aligned: [{}..{}]",
+                level,
+                level.ratio(),
+                aligned_start,
+                aligned_start + candles_to_render.len() * level.ratio()));
+        }
+
+        println!("{}", log_msg);
     }
 }
 

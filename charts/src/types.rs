@@ -1017,6 +1017,13 @@ pub struct PooledEntity {
     pub in_use: bool,
 }
 
+/// Marker component for entities that need to be added to pool
+/// on the next frame (after commands.spawn() has been applied)
+#[derive(Component, Clone, Copy)]
+pub struct PendingPoolEntry {
+    pub entity_type: PooledEntityType,
+}
+
 /// Types of pooled entities
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PooledEntityType {
@@ -1073,6 +1080,50 @@ impl EntityPool {
         self.available.insert(entity);
     }
 
+    /// Try to add entity to pool, respecting max_pool_size
+    /// Returns true if added, false if pool is full
+    pub fn try_add_entity(&mut self, entity: Entity, max_size: usize) -> bool {
+        if self.all_entities.len() >= max_size {
+            #[cfg(debug_assertions)]
+            eprintln!(
+                "Pool {:?} full ({}/{}), skipping entity {:?}",
+                self.entity_type,
+                self.all_entities.len(),
+                max_size,
+                entity
+            );
+            return false;
+        }
+
+        self.all_entities.insert(entity);
+        self.available.insert(entity);
+
+        #[cfg(debug_assertions)]
+        eprintln!(
+            "Added entity {:?} to {:?} pool: {}/{}",
+            entity,
+            self.entity_type,
+            self.all_entities.len(),
+            max_size
+        );
+
+        true
+    }
+
+    /// Remove a corrupted/invalid entity from the pool permanently
+    /// Call this when an entity from the pool fails query validation
+    pub fn remove_invalid(&mut self, entity: Entity) {
+        self.all_entities.remove(&entity);
+        self.available.remove(&entity);
+        #[cfg(debug_assertions)]
+        eprintln!(
+            "WARNING: Removed invalid entity from {:?} pool. Pool size: {} → {}",
+            self.entity_type,
+            self.all_entities.len() + 1,
+            self.all_entities.len()
+        );
+    }
+
     /// Get pool utilization stats
     pub fn stats(&self) -> (usize, usize) {
         (self.all_entities.len(), self.available.len())
@@ -1101,21 +1152,95 @@ impl EntityPools {
     }
 }
 
-/// Configuration for entity pooling
-#[derive(Resource, Clone)]
-pub struct EntityPoolConfig {
+/// Configuration for pool sizes per timeframe
+#[derive(Clone, Copy)]
+pub struct PoolSizeConfig {
     pub initial_pool_size: usize,
     pub max_pool_size: usize,
+}
+
+impl Default for PoolSizeConfig {
+    fn default() -> Self {
+        Self {
+            initial_pool_size: 1000,
+            max_pool_size: 2000,
+        }
+    }
+}
+
+/// Configuration for entity pooling with per-timeframe settings
+#[derive(Resource, Clone)]
+pub struct EntityPoolConfig {
+    pub timeframe_configs: std::collections::HashMap<String, PoolSizeConfig>,
     pub enabled: bool,
 }
 
 impl Default for EntityPoolConfig {
     fn default() -> Self {
+        let mut configs = std::collections::HashMap::new();
+
+        // All timeframes start with same values (1000 initial, 2000 max)
+        // Modifiable per-timeframe later if needed
+        let default_config = PoolSizeConfig::default();
+
+        configs.insert("1m".to_string(), default_config);
+        configs.insert("5m".to_string(), default_config);
+        configs.insert("15m".to_string(), default_config);
+        configs.insert("1h".to_string(), default_config);
+        configs.insert("4h".to_string(), default_config);
+        configs.insert("1d".to_string(), default_config);
+
         Self {
-            initial_pool_size: 1000,
-            max_pool_size: 2000, // Allow growth but cap it
+            timeframe_configs: configs,
             enabled: true,
         }
+    }
+}
+
+impl EntityPoolConfig {
+    /// Get pool size configuration for a specific timeframe
+    pub fn for_timeframe(&self, timeframe: &str) -> PoolSizeConfig {
+        self.timeframe_configs
+            .get(timeframe)
+            .copied()
+            .unwrap_or_else(|| PoolSizeConfig::default())
+    }
+}
+
+/// Configuration for zoom limits per timeframe
+#[derive(Resource, Clone)]
+pub struct ZoomLimitConfig {
+    pub timeframe_limits: std::collections::HashMap<String, usize>,
+    pub global_min: usize,
+}
+
+impl Default for ZoomLimitConfig {
+    fn default() -> Self {
+        let mut limits = std::collections::HashMap::new();
+
+        // All timeframes start with 1000 max candles
+        // Modifiable per-timeframe later if needed
+        limits.insert("1m".to_string(), 1000);
+        limits.insert("5m".to_string(), 1000);
+        limits.insert("15m".to_string(), 1000);
+        limits.insert("1h".to_string(), 1000);
+        limits.insert("4h".to_string(), 1000);
+        limits.insert("1d".to_string(), 1000);
+
+        Self {
+            timeframe_limits: limits,
+            global_min: 10,
+        }
+    }
+}
+
+impl ZoomLimitConfig {
+    /// Get maximum candle count for a specific timeframe
+    pub fn max_for_timeframe(&self, timeframe: &str) -> usize {
+        self.timeframe_limits
+            .get(timeframe)
+            .copied()
+            .unwrap_or(1000)
     }
 }
 

@@ -13,6 +13,7 @@ pub fn handle_mouse_input(
     mut interaction: ResMut<InteractionState>,
     config: Res<CandlestickLODConfig>,
     agg_state: Res<crate::aggregation::AggregationState>,
+    zoom_limit_config: Res<ZoomLimitConfig>,
     mouse_button: Res<ButtonInput<MouseButton>>,
     mut mouse_wheel: MessageReader<MouseWheel>,
     mut window_query: Query<(&mut Window, &mut CursorIcon)>,
@@ -197,7 +198,9 @@ pub fn handle_mouse_input(
 
             // Update shared X-axis state (zoom)
             let old_count = chart.visible_candle_count;
-            let new_count = ((old_count as f32 * zoom_factor).clamp(10.0, 10000.0) as usize)
+            let max_zoom = zoom_limit_config.max_for_timeframe(&chart.timeframe) as f32;
+            let new_count = ((old_count as f32 * zoom_factor)
+                .clamp(zoom_limit_config.global_min as f32, max_zoom) as usize)
                 .min(chart.candles.len());
 
             let focus_offset = focus_candle.saturating_sub(chart.visible_candle_start);
