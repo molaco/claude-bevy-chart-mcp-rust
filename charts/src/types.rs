@@ -586,6 +586,22 @@ impl MovingAverage {
     }
 }
 
+// ============================================================================
+// CHART LOAD STATUS (Frame-timing synchronization)
+// ============================================================================
+
+/// Load status for frame-timing synchronization
+/// Prevents rendering with partially-updated data
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ChartLoadStatus {
+    #[default]
+    Ready,
+    /// Data is being loaded (don't render)
+    Loading,
+    /// Data loaded, waiting for next frame to apply
+    PendingApply,
+}
+
 /// Main chart resource
 #[derive(Resource)]
 pub struct Chart {
@@ -612,7 +628,45 @@ pub struct Chart {
 
     // State
     pub needs_redraw: bool,
-    pub loading: bool, // True when fetching more data
+    pub loading: bool, // True when fetching more data (DEPRECATED - use load_status)
+    pub load_status: ChartLoadStatus, // New: proper frame-timing state
+}
+
+// ============================================================================
+// DEFERRED UPDATES (Next-frame pattern for data loading)
+// ============================================================================
+
+/// Deferred updates resource - holds data to be applied at the start of the next frame
+/// This prevents 1-frame rendering glitches by ensuring all updates are applied
+/// before any rendering systems run.
+#[derive(Resource, Default)]
+pub struct DeferredUpdates {
+    /// Candles to prepend (historical data loaded when scrolling left)
+    pub candles_to_prepend: Option<Vec<Candle>>,
+    /// Candles to append (recent data loaded when scrolling right)
+    pub candles_to_append: Option<Vec<Candle>>,
+    /// Whether aggregation cache needs to be invalidated
+    pub invalidate_aggregation: bool,
+    /// Whether aggregation state needs to be reset
+    pub reset_aggregation_state: bool,
+}
+
+impl DeferredUpdates {
+    /// Check if there are any pending updates
+    pub fn has_pending(&self) -> bool {
+        self.candles_to_prepend.is_some()
+            || self.candles_to_append.is_some()
+            || self.invalidate_aggregation
+            || self.reset_aggregation_state
+    }
+
+    /// Clear all pending updates
+    pub fn clear(&mut self) {
+        self.candles_to_prepend = None;
+        self.candles_to_append = None;
+        self.invalidate_aggregation = false;
+        self.reset_aggregation_state = false;
+    }
 }
 
 /// Calculate number of "virtual candles" worth of space to add on the right edge

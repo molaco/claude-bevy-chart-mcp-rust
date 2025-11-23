@@ -237,9 +237,16 @@ pub fn handle_mouse_input(
     }
 }
 
-pub fn check_lazy_load(mut chart: ResMut<Chart>, db: Res<ChartDatabase>) {
-    if chart.loading {
-        return; // Already loading
+/// Check if lazy loading is needed and queue data for next-frame application
+/// Uses deferred updates pattern to prevent 1-frame rendering glitches
+pub fn check_lazy_load(
+    mut chart: ResMut<Chart>,
+    mut deferred: ResMut<DeferredUpdates>,
+    db: Res<ChartDatabase>,
+) {
+    // Skip if already loading or if there are pending updates waiting to be applied
+    if chart.load_status != ChartLoadStatus::Ready || deferred.has_pending() {
+        return;
     }
 
     let start_idx = chart.visible_candle_start;
@@ -247,7 +254,7 @@ pub fn check_lazy_load(mut chart: ResMut<Chart>, db: Res<ChartDatabase>) {
 
     // Load more historical data when scrolling left
     if start_idx < 20 && chart.candles.first().is_some() {
-        chart.loading = true;
+        chart.load_status = ChartLoadStatus::Loading;
 
         let load_count = 100;
         let load_end_time = chart.candles.first().unwrap().time;
@@ -269,47 +276,24 @@ pub fn check_lazy_load(mut chart: ResMut<Chart>, db: Res<ChartDatabase>) {
             load_end_time - 1, // Exclude the first candle we already have
         ) {
             if !new_candles.is_empty() {
-                println!("Lazy loaded {} historical candles", new_candles.len());
+                println!("Lazy loaded {} historical candles (deferred)", new_candles.len());
 
-                // Prepend new candles
-                let new_len = new_candles.len();
-                let mut combined = new_candles;
-                combined.append(&mut chart.candles);
-                chart.candles = combined;
-
-                // Adjust visible_start to maintain view
-                chart.visible_candle_start += new_len;
-
-                // INCREMENTAL: Only calculate MA for NEW candles
-                println!(
-                    "Recalculating indicators for {} new candles (prepend)",
-                    new_len
-                );
-
-                // Split borrow: borrow candles and indicators separately
-                let candles_ptr = chart.candles.as_slice() as *const [Candle];
-                for indicator in chart.indicators.iter_mut() {
-                    // Safe: we're only reading from candles, not modifying
-                    let candles = unsafe { &*candles_ptr };
-                    if indicator.name.starts_with("SMA") {
-                        indicator.calculate_sma_prepend(candles, new_len);
-                    } else if indicator.name.starts_with("EMA") {
-                        // EMA requires recursive calculation, must recalculate all
-                        println!("Warning: EMA requires full recalculation");
-                        indicator.values = MovingAverage::calculate_ema(candles, indicator.period);
-                    }
-                }
-
-                chart.needs_redraw = true;
+                // Queue for next-frame application instead of immediate update
+                deferred.candles_to_prepend = Some(new_candles);
+                deferred.invalidate_aggregation = true;
+                chart.load_status = ChartLoadStatus::PendingApply;
+            } else {
+                chart.load_status = ChartLoadStatus::Ready;
             }
+        } else {
+            chart.load_status = ChartLoadStatus::Ready;
         }
-
-        chart.loading = false;
+        return; // Don't check append in the same frame
     }
 
     // Load more recent data when scrolling right
     if end_idx > chart.candles.len().saturating_sub(20) && chart.candles.last().is_some() {
-        chart.loading = true;
+        chart.load_status = ChartLoadStatus::Loading;
 
         let load_start_time = chart.candles.last().unwrap().time;
         let interval_ms = match chart.timeframe.as_str() {
@@ -328,37 +312,114 @@ pub fn check_lazy_load(mut chart: ResMut<Chart>, db: Res<ChartDatabase>) {
             load_end_time,
         ) {
             if !new_candles.is_empty() {
-                println!("Lazy loaded {} recent candles", new_candles.len());
+                println!("Lazy loaded {} recent candles (deferred)", new_candles.len());
 
-                // Store old length before extending
-                let old_len = chart.candles.len();
+                // Queue for next-frame application instead of immediate update
+                deferred.candles_to_append = Some(new_candles);
+                deferred.invalidate_aggregation = true;
+                chart.load_status = ChartLoadStatus::PendingApply;
+            } else {
+                chart.load_status = ChartLoadStatus::Ready;
+            }
+        } else {
+            chart.load_status = ChartLoadStatus::Ready;
+        }
+    }
+}
 
-                // Append new candles
-                chart.candles.extend(new_candles);
+/// Apply deferred updates at the start of the frame
+/// This ensures all data changes happen before rendering systems run
+pub fn apply_deferred_updates(
+    mut chart: ResMut<Chart>,
+    mut deferred: ResMut<DeferredUpdates>,
+    mut agg_cache: ResMut<crate::aggregation::AggregationCache>,
+    mut agg_state: ResMut<crate::aggregation::AggregationState>,
+) {
+    if !deferred.has_pending() {
+        return;
+    }
 
-                // INCREMENTAL: Only calculate MA for NEW candles
-                println!("Recalculating indicators from index {} (append)", old_len);
+    // Apply prepended candles (historical data)
+    if let Some(new_candles) = deferred.candles_to_prepend.take() {
+        let new_len = new_candles.len();
+        println!("Applying {} prepended candles", new_len);
 
-                // Split borrow: borrow candles and indicators separately
-                let candles_ptr = chart.candles.as_slice() as *const [Candle];
-                for indicator in chart.indicators.iter_mut() {
-                    // Safe: we're only reading from candles, not modifying
-                    let candles = unsafe { &*candles_ptr };
-                    if indicator.name.starts_with("SMA") {
-                        indicator.calculate_sma_append(candles, old_len);
-                    } else if indicator.name.starts_with("EMA") {
-                        // EMA requires recursive calculation, must recalculate all
-                        println!("Warning: EMA requires full recalculation");
-                        indicator.values = MovingAverage::calculate_ema(candles, indicator.period);
-                    }
-                }
+        // Prepend new candles
+        let mut combined = new_candles;
+        combined.append(&mut chart.candles);
+        chart.candles = combined;
 
-                chart.needs_redraw = true;
+        // Adjust visible_start to maintain view
+        chart.visible_candle_start += new_len;
+
+        // INCREMENTAL: Only calculate MA for NEW candles
+        // Use index-based iteration to avoid borrow issues
+        for i in 0..chart.indicators.len() {
+            let indicator = &chart.indicators[i];
+            if indicator.name.starts_with("SMA") {
+                let period = indicator.period;
+                let new_values = MovingAverage::calculate_sma(&chart.candles, period);
+                chart.indicators[i].values = new_values;
+            } else if indicator.name.starts_with("EMA") {
+                let period = indicator.period;
+                let new_values = MovingAverage::calculate_ema(&chart.candles, period);
+                chart.indicators[i].values = new_values;
             }
         }
-
-        chart.loading = false;
     }
+
+    // Apply appended candles (recent data)
+    if let Some(new_candles) = deferred.candles_to_append.take() {
+        let old_len = chart.candles.len();
+        println!("Applying {} appended candles", new_candles.len());
+
+        // Append new candles
+        chart.candles.extend(new_candles);
+
+        // INCREMENTAL: Calculate new MA values
+        // Collect calculation results first to avoid borrow conflicts
+        let indicator_updates: Vec<(usize, Vec<Option<f32>>)> = chart
+            .indicators
+            .iter()
+            .enumerate()
+            .filter_map(|(i, indicator)| {
+                if indicator.name.starts_with("SMA") || indicator.name.starts_with("EMA") {
+                    let new_values = if indicator.name.starts_with("SMA") {
+                        MovingAverage::calculate_sma(&chart.candles, indicator.period)
+                    } else {
+                        MovingAverage::calculate_ema(&chart.candles, indicator.period)
+                    };
+                    Some((i, new_values))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        // Apply updates
+        for (i, values) in indicator_updates {
+            chart.indicators[i].values = values;
+        }
+    }
+
+    // Invalidate aggregation cache if needed
+    if deferred.invalidate_aggregation {
+        agg_cache.clear_timeframe(&chart.timeframe);
+        deferred.invalidate_aggregation = false;
+    }
+
+    // Reset aggregation state if needed
+    if deferred.reset_aggregation_state {
+        agg_state.current_level = crate::aggregation::AggregationLevel::None;
+        agg_state.previous_level = crate::aggregation::AggregationLevel::None;
+        agg_state.level_change_cooldown = None;
+        deferred.reset_aggregation_state = false;
+    }
+
+    // Mark chart for redraw and set status to ready
+    chart.needs_redraw = true;
+    chart.load_status = ChartLoadStatus::Ready;
+    chart.loading = false; // Keep legacy flag in sync
 }
 
 /// Toggle volume pane visibility with 'V' key

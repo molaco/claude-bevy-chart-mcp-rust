@@ -378,6 +378,7 @@ fn main() {
         .add_plugins(RemoteHttpPlugin::default()) // Enable HTTP transport on port 15702
         .insert_resource(args) // Inject CLI args as a resource
         .init_resource::<FocusState>()
+        .init_resource::<DeferredUpdates>() // Frame-timing: deferred updates for lazy loading
         .insert_resource(EntityPoolConfig::default())
         .insert_resource(ZoomLimitConfig::default())
         .add_message::<TimeframeChangeRequest>()
@@ -399,15 +400,21 @@ fn main() {
             )
                 .chain(),
         )
-        .add_systems(Update, toggle_volume_pane)
-        .add_systems(Update, toggle_sma_indicators)
-        .add_systems(Update, check_lazy_load)
+        // ============================================================================
+        // FRAME-TIMING: Apply deferred updates FIRST, before any rendering
+        // This ensures data changes from lazy loading are applied at frame start
+        // ============================================================================
+        .add_systems(Update, reset_aggregation_frame_state) // Reset frame-local flags
+        .add_systems(Update, apply_deferred_updates.after(reset_aggregation_frame_state)) // MUST run early!
+        .add_systems(Update, toggle_volume_pane.after(apply_deferred_updates))
+        .add_systems(Update, toggle_sma_indicators.after(apply_deferred_updates))
+        .add_systems(Update, check_lazy_load.after(apply_deferred_updates)) // Queues data for NEXT frame
         .add_systems(Update, screenshot_on_keypress)
         .add_systems(Update, update_fps_counter)
         .add_systems(Update, update_timeframe_label)
         .add_systems(Update, handle_timeframe_keyboard)
-        .add_systems(Update, handle_timeframe_change)
-        .add_systems(Update, handle_timeframe_change_aggregation)
+        .add_systems(Update, handle_timeframe_change.after(apply_deferred_updates))
+        .add_systems(Update, handle_timeframe_change_aggregation.after(handle_timeframe_change))
         .add_systems(
             Update,
             cleanup_entity_pools.run_if(on_timer(Duration::from_secs(10))),
@@ -416,7 +423,10 @@ fn main() {
             Update,
             shrink_entity_pools.run_if(on_timer(Duration::from_secs(30))),
         )
-        .add_systems(Update, (handle_mouse_input, update_crosshair).chain()) // Ensures crosshair updates immediately after mouse input
+        .add_systems(Update, (handle_mouse_input, update_crosshair).chain().after(apply_deferred_updates))
+        // ============================================================================
+        // RENDERING: Runs AFTER all data updates are applied
+        // ============================================================================
         .add_systems(
             Update,
             (
@@ -428,8 +438,10 @@ fn main() {
                 reset_redraw_flag,
             )
                 .chain()
-                .after(handle_mouse_input), // CRITICAL: Ensure rendering runs AFTER interaction updates
-        ) // Run rendering systems in sequence, then reset flag
+                .after(handle_mouse_input)
+                .after(check_lazy_load)
+                .after(handle_timeframe_change_aggregation), // Ensure all data updates complete first
+        )
         .run();
 }
 
@@ -639,6 +651,7 @@ fn setup(
         indicators,
         needs_redraw: true,
         loading: false,
+        load_status: ChartLoadStatus::Ready, // Frame-timing: start in ready state
     };
 
     // Initialize persistent crosshair entities (needs chart reference)
@@ -826,6 +839,12 @@ fn init_entity_pools(mut commands: Commands, config: Res<EntityPoolConfig>) {
 // ============================================================================
 // RENDERING CONTROL
 // ============================================================================
+
+/// Reset aggregation frame-local state at the start of each frame
+/// This ensures the level_changed_this_frame flag is fresh for each frame
+fn reset_aggregation_frame_state(mut agg_state: ResMut<aggregation::AggregationState>) {
+    agg_state.begin_frame();
+}
 
 /// Reset the redraw flag after all rendering systems have completed
 /// This prevents unnecessary entity despawn/spawn on every frame

@@ -8,6 +8,10 @@ pub struct AggregationState {
     pub current_level: AggregationLevel,
     pub previous_level: AggregationLevel,
     pub level_change_cooldown: Option<std::time::Instant>,
+    /// Flag indicating level changed THIS FRAME - used to sync all rendering systems
+    /// This prevents race conditions where candlesticks updates previous_level before
+    /// volume bars can detect the change
+    pub level_changed_this_frame: bool,
 }
 
 impl Default for AggregationState {
@@ -16,7 +20,22 @@ impl Default for AggregationState {
             current_level: AggregationLevel::None,
             previous_level: AggregationLevel::None,
             level_change_cooldown: None,
+            level_changed_this_frame: false,
         }
+    }
+}
+
+impl AggregationState {
+    /// Call at the START of each frame to reset the level_changed flag
+    pub fn begin_frame(&mut self) {
+        self.level_changed_this_frame = false;
+    }
+
+    /// Mark that a level change occurred this frame
+    /// Called by the first rendering system that detects the change
+    pub fn mark_level_changed(&mut self) {
+        self.level_changed_this_frame = true;
+        self.previous_level = self.current_level;
     }
 }
 

@@ -96,6 +96,12 @@ pub fn render_candlesticks(
         return;
     }
 
+    // Skip rendering if data is being loaded or pending application
+    // This prevents rendering with stale or inconsistent data
+    if chart.load_status != ChartLoadStatus::Ready {
+        return;
+    }
+
     // Find the Price pane
     let price_pane = chart.panes.iter().find(|p| matches!(p.id, PaneId::Price));
 
@@ -160,7 +166,8 @@ pub fn render_candlesticks(
     let lod_level = calculate_lod_level(candle_width_px, &config);
 
     // Track if we cleared pools this frame
-    let pools_just_cleared = if level != agg_state.previous_level {
+    // Use level_changed_this_frame flag to ensure ALL rendering systems see the same state
+    let pools_just_cleared = if level != agg_state.previous_level && !agg_state.level_changed_this_frame {
         #[cfg(debug_assertions)]
         println!(
             "Aggregation level changed: {:?} -> {:?}, clearing entity pools",
@@ -203,9 +210,12 @@ pub fn render_candlesticks(
             }
         }
 
-        // Update previous_level to prevent detecting this as a change on next frame
-        agg_state.previous_level = level;
+        // Mark level changed so OTHER rendering systems (volume bars) also see the change
+        agg_state.mark_level_changed();
         true  // Pools were cleared
+    } else if agg_state.level_changed_this_frame {
+        // Level already changed earlier this frame (shouldn't happen with current ordering, but safe)
+        true
     } else {
         false  // No clearing happened
     };
@@ -986,6 +996,11 @@ pub fn render_volume_bars(
         return;
     }
 
+    // Skip rendering if data is being loaded or pending application
+    if chart.load_status != ChartLoadStatus::Ready {
+        return;
+    }
+
     // Find the Volume pane
     let volume_pane = chart.panes.iter().find(|p| matches!(p.id, PaneId::Volume));
 
@@ -1022,11 +1037,11 @@ pub fn render_volume_bars(
     };
 
     // Track if we cleared pools this frame
-    // NOTE: Do NOT update agg_state.previous_level here - that's done in render_candlesticks
-    // to avoid race conditions between the two systems
-    let pools_just_cleared = if level != agg_state.previous_level {
+    // Use level_changed_this_frame flag which was set by render_candlesticks
+    // This ensures volume bars see the SAME level change state as candlesticks
+    let pools_just_cleared = if agg_state.level_changed_this_frame {
         #[cfg(debug_assertions)]
-        println!("Aggregation level changed for volume bars, clearing pool");
+        println!("Aggregation level changed for volume bars (via frame flag), clearing pool");
 
         // Return all volume bars to pool
         for (entity, _, _, _, mut visibility) in query.iter_mut() {
@@ -1910,6 +1925,11 @@ pub fn update_crosshair(
 }
 
 pub fn render_moving_averages(mut gizmos: Gizmos, chart: Res<Chart>) {
+    // Skip rendering if data is being loaded or pending application
+    if chart.load_status != ChartLoadStatus::Ready {
+        return;
+    }
+
     // Find the Price pane (indicators overlay on price)
     let price_pane = chart.panes.iter().find(|p| matches!(p.id, PaneId::Price));
 
