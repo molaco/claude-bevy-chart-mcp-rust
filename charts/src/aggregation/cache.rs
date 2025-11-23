@@ -1,7 +1,7 @@
 use crate::types::Candle;
 use super::types::{AggregationLevel, AggregatedCandles};
 use super::engine::aggregate_range;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::time::Instant;
 use bevy::prelude::*;
 
@@ -87,7 +87,7 @@ impl AggregationCache {
     pub fn get_or_aggregate(
         &mut self,
         timeframe: &str,
-        source: &[Candle],
+        source: &BTreeMap<i64, Candle>,
         start: usize,
         count: usize,
         level: AggregationLevel,
@@ -193,15 +193,18 @@ impl AggregationCache {
 mod tests {
     use super::*;
 
-    fn create_test_candles(count: usize) -> Vec<Candle> {
+    fn create_test_candles(count: usize) -> BTreeMap<i64, Candle> {
         (0..count)
-            .map(|i| Candle {
-                time: i as i64 * 1000,
-                open: 100.0 + i as f64,
-                high: 105.0 + i as f64,
-                low: 95.0 + i as f64,
-                close: 102.0 + i as f64,
-                volume: 1000.0 + i as f64,
+            .map(|i| {
+                let candle = Candle {
+                    time: i as i64 * 1000,
+                    open: 100.0 + i as f64,
+                    high: 105.0 + i as f64,
+                    low: 95.0 + i as f64,
+                    close: 102.0 + i as f64,
+                    volume: 1000.0 + i as f64,
+                };
+                (candle.time, candle)
             })
             .collect()
     }

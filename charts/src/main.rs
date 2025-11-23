@@ -1,10 +1,16 @@
 mod aggregation;
+mod api;
+mod cache;
+mod error;
 mod focus;
 mod interaction;
+mod realtime;
 mod rendering;
 mod screenshot;
+mod theme;
 mod types;
 mod ui_layout;
+mod websocket;
 
 use anyhow::{Context, Result};
 use bevy::camera::Camera2d;
@@ -376,11 +382,16 @@ fn main() {
         .add_plugins(FrameTimeDiagnosticsPlugin::default())
         .add_plugins(RemotePlugin::default().with_method("chart/screenshot", handle_screenshot)) // Enable Bevy Remote Protocol for MCP integration
         .add_plugins(RemoteHttpPlugin::default()) // Enable HTTP transport on port 15702
+        .add_plugins(websocket::WebSocketPlugin)
+        .add_plugins(realtime::RealtimePlugin)
         .insert_resource(args) // Inject CLI args as a resource
         .init_resource::<FocusState>()
         .init_resource::<DeferredUpdates>() // Frame-timing: deferred updates for lazy loading
         .insert_resource(EntityPoolConfig::default())
         .insert_resource(ZoomLimitConfig::default())
+        .insert_resource(theme::ChartColors::default())
+        .insert_resource(cache::RenderCache::new())
+        .insert_resource(cache::ThrottleState::default())
         .add_message::<TimeframeChangeRequest>()
         .add_systems(Startup, ui_layout::setup_split_layout)
         .add_systems(Startup, setup)
@@ -530,6 +541,7 @@ fn setup(
     mut commands: Commands,
     window_query: Query<(Entity, &Window), With<Window>>,
     args: Res<ChartArgs>,
+    colors: Res<theme::ChartColors>,
 ) {
     // Spawn camera
     commands.spawn(Camera2d);
@@ -561,11 +573,14 @@ fn setup(
     );
 
     // Load candles for specified date range
-    let candles = db
+    let loaded_candles = db
         .load_candles(ticker_id, &args.timeframe, start_time, end_time)
         .expect("Failed to load candles");
 
-    println!("Loaded {} candles", candles.len());
+    println!("Loaded {} candles", loaded_candles.len());
+
+    // Convert Vec to slice for functions that need it
+    let candles_slice: Vec<Candle> = loaded_candles.clone();
 
     // Calculate chart area dynamically based on window size
     // Chart occupies 70% of window width (left side)
@@ -584,9 +599,9 @@ fn setup(
         Vec2::new(chart_width * 0.95, chart_height), // Leave 5% horizontal margin for labels
     );
 
-    let visible_candle_count = 50.min(candles.len());
+    let visible_candle_count = 50.min(loaded_candles.len());
     let spacing = right_spacing_candles(visible_candle_count);
-    let visible_candle_start = (candles.len() + spacing).saturating_sub(visible_candle_count);
+    let visible_candle_start = (loaded_candles.len() + spacing).saturating_sub(visible_candle_count);
 
     // Initialize multi-pane layout: 70% Price + 30% Volume
     let mut panes = vec![
@@ -611,17 +626,20 @@ fn setup(
 
     // Calculate Moving Average indicators (before fitting bounds so we can include them)
     let indicators = vec![
-        MovingAverage::new_sma(&candles, 20, Color::srgb(1.0, 0.8, 0.0)), // Yellow SMA-20
-        MovingAverage::new_sma(&candles, 50, Color::srgb(0.0, 1.0, 1.0)), // Cyan SMA-50
-        MovingAverage::new_sma(&candles, 200, Color::srgb(1.0, 0.0, 1.0)), // Magenta SMA-200
+        MovingAverage::new_sma(&candles_slice, 20, Color::srgb(1.0, 0.8, 0.0)), // Yellow SMA-20
+        MovingAverage::new_sma(&candles_slice, 50, Color::srgb(0.0, 1.0, 1.0)), // Cyan SMA-50
+        MovingAverage::new_sma(&candles_slice, 200, Color::srgb(1.0, 0.0, 1.0)), // Magenta SMA-200
     ];
+
+    // Convert to BTreeMap for bounds fitting functions
+    let candles_btree: std::collections::BTreeMap<i64, Candle> = loaded_candles.iter().map(|c| (c.time, c.clone())).collect();
 
     // Fit Y-axis bounds for each pane (including indicators for Price pane)
     for pane in panes.iter_mut() {
         match pane.pane_type {
             PaneType::Price => {
                 pane.space.fit_price_bounds_with_indicators(
-                    &candles,
+                    &candles_btree,
                     &indicators,
                     visible_candle_start,
                     visible_candle_count,
@@ -629,7 +647,7 @@ fn setup(
             }
             PaneType::Volume => {
                 pane.space
-                    .fit_volume_bounds(&candles, visible_candle_start, visible_candle_count, CandlestickLODConfig::default().volume_y_axis_padding);
+                    .fit_volume_bounds(&candles_btree, visible_candle_start, visible_candle_count, CandlestickLODConfig::default().volume_y_axis_padding);
             }
             _ => {}
         }
@@ -641,7 +659,7 @@ fn setup(
     let chart = Chart {
         ticker_id,
         timeframe: args.timeframe.clone(),
-        candles,
+        candles: loaded_candles.into_iter().map(|c| (c.time, c)).collect(),
         candle_offset: 0,
         visible_candle_start,
         visible_candle_count,
@@ -655,7 +673,7 @@ fn setup(
     };
 
     // Initialize persistent crosshair entities (needs chart reference)
-    init_crosshair(&mut commands, &chart);
+    init_crosshair(&mut commands, &chart, &colors);
 
     // Initialize timeframe manager
     let mut timeframe_mgr = TimeframeManager::new(ticker_id, args.timeframe.clone());
@@ -1102,8 +1120,8 @@ fn handle_timeframe_change(
         let end_time = parse_date_to_timestamp(&args.end).unwrap_or(i64::MAX);
 
         match db.load_candles(event.ticker_id, &event.to, start_time, end_time) {
-            Ok(candles) => {
-                if candles.is_empty() {
+            Ok(loaded_candles) => {
+                if loaded_candles.is_empty() {
                     eprintln!("No data available for timeframe: {}", event.to);
                     eprintln!("Try downloading data first with: cargo run --bin data-loader -- klines -t {} -i {} -s {} -e {}",
                         args.ticker, event.to, args.start, args.end);
@@ -1112,60 +1130,67 @@ fn handle_timeframe_change(
 
                 println!(
                     "Loaded {} candles for timeframe: {}",
-                    candles.len(),
+                    loaded_candles.len(),
                     event.to
                 );
 
-                // Update chart with new data
-                chart.candles = candles.clone();
+                // Keep a slice copy for functions that need &[Candle]
+                let candles_slice = loaded_candles.clone();
+
+                // Update chart with new data (convert to BTreeMap)
+                chart.candles = loaded_candles.into_iter().map(|c| (c.time, c)).collect();
                 chart.timeframe = event.to.clone();
                 timeframe_mgr.current_timeframe = event.to.clone();
 
                 // Reset visible range to show all candles
                 chart.visible_candle_start = 0;
-                chart.visible_candle_count = candles.len().min(200); // Show up to 200 candles
+                chart.visible_candle_count = candles_slice.len().min(200); // Show up to 200 candles
 
                 // Recalculate indicators with new data
                 let new_indicators = vec![
-                    MovingAverage::new_sma(&candles, 20, Color::srgb(1.0, 0.8, 0.0)),
-                    MovingAverage::new_sma(&candles, 50, Color::srgb(0.0, 1.0, 1.0)),
-                    MovingAverage::new_sma(&candles, 200, Color::srgb(1.0, 0.0, 1.0)),
+                    MovingAverage::new_sma(&candles_slice, 20, Color::srgb(1.0, 0.8, 0.0)),
+                    MovingAverage::new_sma(&candles_slice, 50, Color::srgb(0.0, 1.0, 1.0)),
+                    MovingAverage::new_sma(&candles_slice, 200, Color::srgb(1.0, 0.0, 1.0)),
                 ];
 
-                // Update pane bounds (clone data to avoid borrow checker issues)
+                // Update pane bounds
                 let visible_start = chart.visible_candle_start;
                 let visible_count = chart.visible_candle_count;
-                let candles_clone = candles.clone();
-                let indicators_clone = new_indicators.clone();
+                let volume_padding = config.volume_y_axis_padding;
 
                 chart.indicators = new_indicators;
 
-                for pane in &mut chart.panes {
-                    match pane.pane_type {
-                        PaneType::Price => {
-                            pane.space.fit_price_bounds_with_indicators(
-                                &candles_clone,
-                                &indicators_clone,
-                                visible_start,
-                                visible_count,
-                            );
+                // Use a scoped block to split borrows cleanly
+                {
+                    let chart = chart.as_mut();
+                    let candles = &chart.candles;
+                    let indicators = &chart.indicators;
+                    for pane in chart.panes.iter_mut() {
+                        match pane.pane_type {
+                            PaneType::Price => {
+                                pane.space.fit_price_bounds_with_indicators(
+                                    candles,
+                                    indicators,
+                                    visible_start,
+                                    visible_count,
+                                );
+                            }
+                            PaneType::Volume => {
+                                pane.space.fit_volume_bounds(
+                                    candles,
+                                    visible_start,
+                                    visible_count,
+                                    volume_padding,
+                                );
+                            }
+                            _ => {}
                         }
-                        PaneType::Volume => {
-                            pane.space.fit_volume_bounds(
-                                &candles_clone,
-                                visible_start,
-                                visible_count,
-                                config.volume_y_axis_padding,
-                            );
-                        }
-                        _ => {}
+                        pane.space.recalculate_cache(
+                            visible_count,
+                            crate::aggregation::AggregationLevel::None,
+                            visible_count
+                        );
                     }
-                    // Recalculate cached values after timeframe change (no aggregation during timeframe change)
-                    pane.space.recalculate_cache(
-                        visible_count,
-                        crate::aggregation::AggregationLevel::None,
-                        visible_count
-                    );
                 }
 
                 // Trigger redraw

@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 use duckdb::{params, Connection};
+use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use crate::aggregation::AggregationLevel;
 
@@ -127,7 +128,7 @@ impl ChartSpace {
     /// Fit price bounds to visible candles
     pub fn fit_price_bounds(
         &mut self,
-        candles: &[Candle],
+        candles: &BTreeMap<i64, Candle>,
         visible_candle_start: usize,
         visible_candle_count: usize,
     ) {
@@ -142,7 +143,10 @@ impl ChartSpace {
             return;
         }
 
-        let visible_candles = &candles[start..end];
+        let visible_candles: Vec<&Candle> = candles.values()
+            .skip(start)
+            .take(end - start)
+            .collect();
         let mut min_price = f64::MAX;
         let mut max_price = f64::MIN;
 
@@ -164,7 +168,7 @@ impl ChartSpace {
     /// Fit price bounds to visible candles AND indicator values (Option B)
     pub fn fit_price_bounds_with_indicators(
         &mut self,
-        candles: &[Candle],
+        candles: &BTreeMap<i64, Candle>,
         indicators: &[MovingAverage],
         visible_candle_start: usize,
         visible_candle_count: usize,
@@ -180,7 +184,10 @@ impl ChartSpace {
             return;
         }
 
-        let visible_candles = &candles[start..end];
+        let visible_candles: Vec<&Candle> = candles.values()
+            .skip(start)
+            .take(end - start)
+            .collect();
         let mut min_price = f64::MAX;
         let mut max_price = f64::MIN;
 
@@ -217,7 +224,7 @@ impl ChartSpace {
     /// Fit volume bounds to visible candles
     pub fn fit_volume_bounds(
         &mut self,
-        candles: &[Candle],
+        candles: &BTreeMap<i64, Candle>,
         visible_candle_start: usize,
         visible_candle_count: usize,
         volume_y_axis_padding: f32,
@@ -233,9 +240,9 @@ impl ChartSpace {
             return;
         }
 
-        let visible_candles = &candles[start..end];
-        let max_volume = visible_candles
-            .iter()
+        let max_volume = candles.values()
+            .skip(start)
+            .take(end - start)
             .map(|c| c.volume)
             .max_by(|a, b| a.partial_cmp(b).unwrap())
             .unwrap_or(1.0);
@@ -609,7 +616,7 @@ pub struct Chart {
     pub timeframe: String, // "15m", "1h"
 
     // Data
-    pub candles: Vec<Candle>, // Loaded candles (grows as you scroll)
+    pub candles: BTreeMap<i64, Candle>, // Loaded candles keyed by timestamp (O(log n) lookups)
     pub candle_offset: usize, // Global offset (for lazy loading)
 
     // SHARED X-axis state (synchronized across all panes)
@@ -630,6 +637,28 @@ pub struct Chart {
     pub needs_redraw: bool,
     pub loading: bool, // True when fetching more data (DEPRECATED - use load_status)
     pub load_status: ChartLoadStatus, // New: proper frame-timing state
+}
+
+impl Chart {
+    /// Get candles in a time range (O(log n) query)
+    pub fn candles_in_range(&self, start: i64, end: i64) -> impl Iterator<Item = (&i64, &Candle)> {
+        self.candles.range(start..=end)
+    }
+
+    /// Insert or update a candle
+    pub fn insert_candle(&mut self, candle: Candle) {
+        self.candles.insert(candle.time, candle);
+    }
+
+    /// Get earliest candle time
+    pub fn earliest_time(&self) -> Option<i64> {
+        self.candles.keys().next().copied()
+    }
+
+    /// Get latest candle time
+    pub fn latest_time(&self) -> Option<i64> {
+        self.candles.keys().next_back().copied()
+    }
 }
 
 // ============================================================================

@@ -1,3 +1,4 @@
+use crate::cache::RenderCache;
 use crate::focus::{FocusState, FocusTarget};
 use crate::types::*;
 use bevy::input::mouse::MouseWheel;
@@ -11,6 +12,7 @@ use bevy::window::{CursorIcon, SystemCursorIcon};
 pub fn handle_mouse_input(
     mut chart: ResMut<Chart>,
     mut interaction: ResMut<InteractionState>,
+    mut render_cache: ResMut<RenderCache>,
     config: Res<CandlestickLODConfig>,
     agg_state: Res<crate::aggregation::AggregationState>,
     zoom_limit_config: Res<ZoomLimitConfig>,
@@ -116,6 +118,9 @@ pub fn handle_mouse_input(
             // Update Y-axis bounds
             update_pane_bounds(&mut chart, config.volume_y_axis_padding);
 
+            // Invalidate render cache after pane resize
+            render_cache.clear_all();
+
             chart.needs_redraw = true;
         }
 
@@ -179,6 +184,9 @@ pub fn handle_mouse_input(
                 pane.space.recalculate_cache(visible_candle_count, agg_level, aggregated_count);
             }
 
+            // Invalidate render cache after pan completes
+            render_cache.clear_all();
+
             chart.needs_redraw = true;
             interaction.drag_start_pos = interaction.mouse_pos;
         }
@@ -227,6 +235,9 @@ pub fn handle_mouse_input(
                 pane.space.recalculate_cache(visible_candle_count, agg_level, aggregated_count);
             }
 
+            // Invalidate render cache after zoom completes
+            render_cache.clear_all();
+
             chart.needs_redraw = true;
 
             println!(
@@ -253,11 +264,11 @@ pub fn check_lazy_load(
     let end_idx = start_idx + chart.visible_candle_count;
 
     // Load more historical data when scrolling left
-    if start_idx < 20 && chart.candles.first().is_some() {
+    if start_idx < 20 && chart.candles.first_key_value().is_some() {
         chart.load_status = ChartLoadStatus::Loading;
 
         let load_count = 100;
-        let load_end_time = chart.candles.first().unwrap().time;
+        let load_end_time = chart.candles.first_key_value().unwrap().1.time;
 
         // Calculate start time based on timeframe
         let interval_ms = match chart.timeframe.as_str() {
@@ -292,10 +303,10 @@ pub fn check_lazy_load(
     }
 
     // Load more recent data when scrolling right
-    if end_idx > chart.candles.len().saturating_sub(20) && chart.candles.last().is_some() {
+    if end_idx > chart.candles.len().saturating_sub(20) && chart.candles.last_key_value().is_some() {
         chart.load_status = ChartLoadStatus::Loading;
 
-        let load_start_time = chart.candles.last().unwrap().time;
+        let load_start_time = chart.candles.last_key_value().unwrap().1.time;
         let interval_ms = match chart.timeframe.as_str() {
             "15m" => 15 * 60 * 1000,
             "1h" => 60 * 60 * 1000,
@@ -344,25 +355,27 @@ pub fn apply_deferred_updates(
         let new_len = new_candles.len();
         println!("Applying {} prepended candles", new_len);
 
-        // Prepend new candles
-        let mut combined = new_candles;
-        combined.append(&mut chart.candles);
-        chart.candles = combined;
+        // Insert new candles into BTreeMap (automatically sorted by key)
+        for candle in new_candles {
+            chart.candles.insert(candle.time, candle);
+        }
 
         // Adjust visible_start to maintain view
         chart.visible_candle_start += new_len;
 
         // INCREMENTAL: Only calculate MA for NEW candles
         // Use index-based iteration to avoid borrow issues
+        // Convert BTreeMap values to Vec for MA calculation
+        let candles_vec: Vec<Candle> = chart.candles.values().cloned().collect();
         for i in 0..chart.indicators.len() {
             let indicator = &chart.indicators[i];
             if indicator.name.starts_with("SMA") {
                 let period = indicator.period;
-                let new_values = MovingAverage::calculate_sma(&chart.candles, period);
+                let new_values = MovingAverage::calculate_sma(&candles_vec, period);
                 chart.indicators[i].values = new_values;
             } else if indicator.name.starts_with("EMA") {
                 let period = indicator.period;
-                let new_values = MovingAverage::calculate_ema(&chart.candles, period);
+                let new_values = MovingAverage::calculate_ema(&candles_vec, period);
                 chart.indicators[i].values = new_values;
             }
         }
@@ -370,14 +383,18 @@ pub fn apply_deferred_updates(
 
     // Apply appended candles (recent data)
     if let Some(new_candles) = deferred.candles_to_append.take() {
-        let old_len = chart.candles.len();
+        let _old_len = chart.candles.len();
         println!("Applying {} appended candles", new_candles.len());
 
-        // Append new candles
-        chart.candles.extend(new_candles);
+        // Insert new candles into BTreeMap (automatically sorted by key)
+        for candle in new_candles {
+            chart.candles.insert(candle.time, candle);
+        }
 
         // INCREMENTAL: Calculate new MA values
         // Collect calculation results first to avoid borrow conflicts
+        // Convert BTreeMap values to Vec for MA calculation
+        let candles_vec: Vec<Candle> = chart.candles.values().cloned().collect();
         let indicator_updates: Vec<(usize, Vec<Option<f32>>)> = chart
             .indicators
             .iter()
@@ -385,9 +402,9 @@ pub fn apply_deferred_updates(
             .filter_map(|(i, indicator)| {
                 if indicator.name.starts_with("SMA") || indicator.name.starts_with("EMA") {
                     let new_values = if indicator.name.starts_with("SMA") {
-                        MovingAverage::calculate_sma(&chart.candles, indicator.period)
+                        MovingAverage::calculate_sma(&candles_vec, indicator.period)
                     } else {
-                        MovingAverage::calculate_ema(&chart.candles, indicator.period)
+                        MovingAverage::calculate_ema(&candles_vec, indicator.period)
                     };
                     Some((i, new_values))
                 } else {

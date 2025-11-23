@@ -1,5 +1,7 @@
+use crate::cache::RenderCache;
 use crate::types::*;
 use crate::aggregation::*;
+use crate::theme::ChartColors;
 use bevy::prelude::*;
 use bevy::sprite::Anchor;
 use bevy::window::CursorOptions;
@@ -30,6 +32,7 @@ pub fn render_candlesticks(
     mut commands: Commands,
     chart: Res<Chart>,
     config: Res<CandlestickLODConfig>,
+    colors: Res<ChartColors>,
     agg_config: Res<AggregationConfig>,
     mut agg_cache: ResMut<AggregationCache>,
     mut agg_state: ResMut<AggregationState>,
@@ -110,11 +113,15 @@ pub fn render_candlesticks(
     }
     let price_pane = price_pane.unwrap();
 
+    // Collect candles as a Vec for slice-based operations (BTreeMap doesn't support slicing)
+    let candles_vec: Vec<Candle> = chart.candles.values().cloned().collect();
+
     // Get shared X-axis state
     let start = chart.visible_candle_start;
-    let end = (start + chart.visible_candle_count).min(chart.candles.len());
+    let candle_count = candles_vec.len();
+    let end = (start + chart.visible_candle_count).min(candle_count);
 
-    if start >= end {
+    if start >= end || candle_count == 0 {
         return;
     }
 
@@ -152,7 +159,7 @@ pub fn render_candlesticks(
         (aggregated_data.candles.as_slice(), 0_usize, aggregated_data.source_range.0)
     } else {
         // No aggregation needed
-        (&chart.candles[start..end], start, start)
+        (&candles_vec[start..end], start, start)
     };
 
     // Determine LOD level based on candle width
@@ -387,7 +394,7 @@ pub fn render_candlesticks(
                         let new_entity = commands
                             .spawn((
                                 Sprite {
-                                    color: Color::srgb(0.5, 0.5, 0.5),
+                                    color: colors.text,
                                     custom_size: Some(Vec2::new(1.0, wick_height)),
                                     ..default()
                                 },
@@ -417,7 +424,7 @@ pub fn render_candlesticks(
                     let new_entity = commands
                         .spawn((
                             Sprite {
-                                color: Color::srgb(0.5, 0.5, 0.5),
+                                color: colors.text,
                                 custom_size: Some(Vec2::new(1.0, wick_height)),
                                 ..default()
                             },
@@ -448,9 +455,9 @@ pub fn render_candlesticks(
                 );
 
                 let body_color = if candle.close >= candle.open {
-                    Color::srgb(0.0, 0.8, 0.2) // Green
+                    colors.bull_candle
                 } else {
-                    Color::srgb(0.9, 0.2, 0.2) // Red
+                    colors.bear_candle
                 };
 
                 // UPDATE or GET FROM POOL body entity
@@ -592,9 +599,9 @@ pub fn render_candlesticks(
                 let height = (high_pos.y - low_pos.y).abs().max(1.0);
 
                 let color = if candle.close >= candle.open {
-                    Color::srgb(0.0, 0.8, 0.2) // Green
+                    colors.bull_candle
                 } else {
-                    Color::srgb(0.9, 0.2, 0.2) // Red
+                    colors.bear_candle
                 };
 
                 // UPDATE or GET FROM POOL OHLC line entity
@@ -748,9 +755,9 @@ pub fn render_candlesticks(
                 let height = (high_pos.y - low_pos.y).abs().max(1.0);
 
                 let color = if candle.close >= candle.open {
-                    Color::srgb(0.0, 0.8, 0.2) // Green
+                    colors.bull_candle
                 } else {
-                    Color::srgb(0.9, 0.2, 0.2) // Red
+                    colors.bear_candle
                 };
 
                 // UPDATE or GET FROM POOL range line entity
@@ -979,6 +986,7 @@ pub fn render_volume_bars(
     mut commands: Commands,
     chart: Res<Chart>,
     config: Res<CandlestickLODConfig>,
+    colors: Res<ChartColors>,
     agg_config: Res<AggregationConfig>,
     mut agg_cache: ResMut<AggregationCache>,
     mut agg_state: ResMut<AggregationState>,
@@ -1017,12 +1025,15 @@ pub fn render_volume_bars(
     }
     let price_pane = price_pane.unwrap();
 
+    // Collect candles as a Vec for slice-based operations (BTreeMap doesn't support slicing)
+    let candles_vec: Vec<Candle> = chart.candles.values().cloned().collect();
 
     // Get shared X-axis state
     let start = chart.visible_candle_start;
-    let end = (start + chart.visible_candle_count).min(chart.candles.len());
+    let candle_count = candles_vec.len();
+    let end = (start + chart.visible_candle_count).min(candle_count);
 
-    if start >= end {
+    if start >= end || candle_count == 0 {
         return;
     }
 
@@ -1072,7 +1083,7 @@ pub fn render_volume_bars(
         (aggregated_data.candles.as_slice(), 0_usize, aggregated_data.source_range.0)
     } else {
         // No aggregation needed
-        (&chart.candles[start..end], start, start)
+        (&candles_vec[start..end], start, start)
     };
 
     let volume_pane = chart.panes.iter().find(|p| matches!(p.id, PaneId::Volume)).unwrap();
@@ -1169,9 +1180,9 @@ pub fn render_volume_bars(
 
         // Color based on candle direction
         let bar_color = if candle.close >= candle.open {
-            Color::srgba(0.0, 0.8, 0.2, 0.6) // Green with transparency
+            colors.volume_bull
         } else {
-            Color::srgba(0.9, 0.2, 0.2, 0.6) // Red with transparency
+            colors.volume_bear
         };
 
         // UPDATE or GET FROM POOL volume bar entity
@@ -1308,7 +1319,7 @@ pub fn render_volume_bars(
 }
 
 /// Initialize persistent crosshair entities (called once at startup from setup)
-pub fn init_crosshair(commands: &mut Commands, chart: &Chart) {
+pub fn init_crosshair(commands: &mut Commands, chart: &Chart, colors: &ChartColors) {
     let mut horizontal_lines = Vec::new();
     let mut price_labels = Vec::new();
 
@@ -1338,7 +1349,7 @@ pub fn init_crosshair(commands: &mut Commands, chart: &Chart) {
         let segment_id = commands
             .spawn((
                 Sprite {
-                    color: Color::srgba(1.0, 1.0, 1.0, 0.6),
+                    color: colors.crosshair,
                     custom_size: Some(Vec2::new(1.0, DASH_LENGTH)),
                     ..default()
                 },
@@ -1364,7 +1375,7 @@ pub fn init_crosshair(commands: &mut Commands, chart: &Chart) {
             let segment_id = commands
                 .spawn((
                     Sprite {
-                        color: Color::srgba(1.0, 1.0, 1.0, 0.6),
+                        color: colors.crosshair,
                         custom_size: Some(Vec2::new(DASH_LENGTH, 1.0)),
                         ..default()
                     },
@@ -1385,7 +1396,7 @@ pub fn init_crosshair(commands: &mut Commands, chart: &Chart) {
                     font_size: 14.0,
                     ..default()
                 },
-                TextColor(Color::srgb(1.0, 1.0, 0.0)),
+                TextColor(colors.text),
                 Anchor::CENTER_LEFT,
                 Transform::from_translation(Vec3::new(chart_right + 50.0, 0.0, 4.0)),
                 Visibility::Hidden,
@@ -1403,7 +1414,7 @@ pub fn init_crosshair(commands: &mut Commands, chart: &Chart) {
                 font_size: 14.0,
                 ..default()
             },
-            TextColor(Color::srgb(1.0, 1.0, 0.0)),
+            TextColor(colors.text),
             Anchor::CENTER,
             Transform::from_translation(Vec3::new(0.0, chart_bottom - 40.0, 4.0)),
             Visibility::Hidden,
@@ -1419,7 +1430,7 @@ pub fn init_crosshair(commands: &mut Commands, chart: &Chart) {
                 font_size: 16.0,
                 ..default()
             },
-            TextColor(Color::srgb(1.0, 1.0, 1.0)),
+            TextColor(colors.text),
             Anchor::TOP_LEFT,
             Transform::from_translation(Vec3::new(
                 first_pane.space.viewport.min.x + 100.0,
@@ -1448,6 +1459,7 @@ pub fn render_grid_and_axes(
     chart: Res<Chart>,
     grid: Res<ChartGrid>,
     axes: Res<ChartAxes>,
+    colors: Res<ChartColors>,
     config: Res<CandlestickLODConfig>,
     query: Query<Entity, With<GridElement>>,
 ) {
@@ -1463,6 +1475,9 @@ pub fn render_grid_and_axes(
     if !grid.show_grid || chart.panes.is_empty() {
         return;
     }
+
+    // Collect candles as a Vec for indexed access (BTreeMap doesn't support indexing)
+    let candles_vec: Vec<Candle> = chart.candles.values().cloned().collect();
 
     // Calculate total chart bounds (from top of first pane to bottom of last pane)
     let first_pane = &chart.panes[0];
@@ -1541,7 +1556,7 @@ pub fn render_grid_and_axes(
     // ========== PANE BORDERS (Panel-style separation) ==========
     for pane in &chart.panes {
         let viewport = &pane.space.viewport;
-        let border_color = Color::srgba(0.5, 0.5, 0.5, 0.6);
+        let border_color = colors.axis_line;
         let border_thickness = 2.0;
 
         // Top border
@@ -1599,7 +1614,7 @@ pub fn render_grid_and_axes(
         let grip_width = 50.0;
         let line_height = 2.0;
         let line_spacing = 4.0;
-        let grip_color = Color::srgba(0.6, 0.6, 0.6, 0.7);
+        let grip_color = colors.axis_line;
 
         // Draw 2 horizontal lines
         for j in 0..2 {
@@ -1627,7 +1642,7 @@ pub fn render_grid_and_axes(
             let candle_index = chart.visible_candle_start
                 + (candle_percent * chart.visible_candle_count as f32) as usize;
 
-            if candle_index >= chart.candles.len() {
+            if candle_index >= candles_vec.len() {
                 continue;
             }
 
@@ -1656,12 +1671,12 @@ pub fn render_grid_and_axes(
             let candle_index = chart.visible_candle_start
                 + (candle_percent * chart.visible_candle_count as f32) as usize;
 
-            if candle_index >= chart.candles.len() {
+            if candle_index >= candles_vec.len() {
                 continue;
             }
 
             let x = chart_left + candle_percent * (chart_right - chart_left);
-            let candle = &chart.candles[candle_index];
+            let candle = &candles_vec[candle_index];
             let label_y = chart_bottom - 40.0;
 
             // Format timestamp using chrono
@@ -1729,6 +1744,7 @@ pub fn update_crosshair(
     chart: Res<Chart>,
     crosshair: Res<Crosshair>,
     mut interaction: ResMut<InteractionState>,
+    mut render_cache: ResMut<RenderCache>,
     mut transforms: Query<&mut Transform>,
     mut visibilities: Query<&mut Visibility>,
     mut texts: Query<&mut Text>,
@@ -1776,6 +1792,9 @@ pub fn update_crosshair(
     }
 
     // ========== FROM HERE ON: Crosshair is visible, update positions ==========
+    // Collect candles as a Vec for indexed access (BTreeMap doesn't support indexing)
+    let candles_vec: Vec<Candle> = chart.candles.values().cloned().collect();
+
     let first_pane = &chart.panes[0];
     let chart_right = first_pane.space.viewport.max.x;
 
@@ -1787,6 +1806,9 @@ pub fn update_crosshair(
 
     if mouse_moved {
         interaction.last_crosshair_mouse_pos = interaction.mouse_pos;
+
+        // Selective cache invalidation: only clear crosshair, preserve main chart cache
+        render_cache.clear_crosshair();
 
         // ========== UPDATE VERTICAL CROSSHAIR LINE POSITIONS ==========
         for segment in &crosshair_entities.vertical_line_segments {
@@ -1879,7 +1901,7 @@ pub fn update_crosshair(
         return;
     };
 
-    if candle_index >= chart.candles.len() {
+    if candle_index >= candles_vec.len() {
         interaction.last_crosshair_candle_index = None;
         return;
     }
@@ -1889,7 +1911,7 @@ pub fn update_crosshair(
 
     if candle_changed {
         interaction.last_crosshair_candle_index = Some(candle_index);
-        let candle = &chart.candles[candle_index];
+        let candle = &candles_vec[candle_index];
 
         // ========== UPDATE TIME LABEL TEXT (only when candle changes) ==========
         if crosshair.show_time_label {

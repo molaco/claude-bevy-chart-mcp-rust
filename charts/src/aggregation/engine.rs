@@ -1,25 +1,27 @@
 use crate::types::Candle;
 use super::types::{AggregationLevel, AggregatedCandles};
+use std::collections::BTreeMap;
 
 /// Aggregate source candles at specified level
 pub fn aggregate_candles(
-    source: &[Candle],
+    source: &BTreeMap<i64, Candle>,
     level: AggregationLevel,
 ) -> AggregatedCandles {
     let ratio = level.ratio();
+    let candle_vec: Vec<&Candle> = source.values().collect();
 
     if ratio == 1 {
         // No aggregation needed
         return AggregatedCandles {
             level,
-            candles: source.to_vec(),
+            candles: candle_vec.iter().map(|c| (*c).clone()).collect(),
             source_range: (0, source.len()),
         };
     }
 
-    let aggregated = source
+    let aggregated = candle_vec
         .chunks(ratio)
-        .map(|chunk| aggregate_chunk(chunk))
+        .map(|chunk| aggregate_chunk_refs(chunk))
         .collect();
 
     AggregatedCandles {
@@ -58,23 +60,57 @@ fn aggregate_chunk(chunk: &[Candle]) -> Candle {
     }
 }
 
+/// Aggregate a chunk of candle references into one synthetic candle
+fn aggregate_chunk_refs(chunk: &[&Candle]) -> Candle {
+    assert!(!chunk.is_empty(), "Cannot aggregate empty chunk");
+
+    let first = chunk[0];
+    let last = chunk[chunk.len() - 1];
+
+    let high = chunk.iter()
+        .map(|c| c.high)
+        .fold(f64::MIN, f64::max);
+
+    let low = chunk.iter()
+        .map(|c| c.low)
+        .fold(f64::MAX, f64::min);
+
+    let volume = chunk.iter()
+        .map(|c| c.volume)
+        .sum();
+
+    Candle {
+        time: first.time,
+        open: first.open,
+        high,
+        low,
+        close: last.close,
+        volume,
+    }
+}
+
 /// Aggregate a range of source candles
 /// Uses globally aligned boundaries to ensure stable aggregation during panning
 pub fn aggregate_range(
-    source: &[Candle],
+    source: &BTreeMap<i64, Candle>,
     start: usize,
     count: usize,
     level: AggregationLevel,
 ) -> AggregatedCandles {
     let ratio = level.ratio();
+    let source_len = source.len();
 
     if ratio == 1 {
         // No aggregation - return as-is
-        let end = (start + count).min(source.len());
-        let slice = &source[start..end];
+        let end = (start + count).min(source_len);
+        let candles: Vec<Candle> = source.values()
+            .skip(start)
+            .take(end - start)
+            .cloned()
+            .collect();
         return AggregatedCandles {
             level,
-            candles: slice.to_vec(),
+            candles,
             source_range: (start, end),
         };
     }
@@ -85,16 +121,22 @@ pub fn aggregate_range(
     let aligned_start = (start / ratio) * ratio;
 
     // Calculate end of visible range
-    let end = (start + count).min(source.len());
+    let end = (start + count).min(source_len);
 
     // Align end boundary up to cover all visible candles
     let aligned_end = ((end + ratio - 1) / ratio) * ratio;
 
     // Aggregate from aligned boundaries
-    let slice_end = aligned_end.min(source.len());
-    let slice = &source[aligned_start..slice_end];
+    let slice_end = aligned_end.min(source_len);
 
-    let mut result = aggregate_candles(slice, level);
+    // Create a temporary BTreeMap with the slice of candles for aggregation
+    let slice_candles: BTreeMap<i64, Candle> = source.values()
+        .skip(aligned_start)
+        .take(slice_end - aligned_start)
+        .map(|c| (c.time, c.clone()))
+        .collect();
+
+    let mut result = aggregate_candles(&slice_candles, level);
     result.source_range = (aligned_start, slice_end);
     result
 }
@@ -103,15 +145,18 @@ pub fn aggregate_range(
 mod tests {
     use super::*;
 
-    fn create_test_candles(count: usize) -> Vec<Candle> {
+    fn create_test_candles(count: usize) -> BTreeMap<i64, Candle> {
         (0..count)
-            .map(|i| Candle {
-                time: i as i64 * 1000,
-                open: 100.0 + i as f64,
-                high: 105.0 + i as f64,
-                low: 95.0 + i as f64,
-                close: 102.0 + i as f64,
-                volume: 1000.0 + i as f64,
+            .map(|i| {
+                let candle = Candle {
+                    time: i as i64 * 1000,
+                    open: 100.0 + i as f64,
+                    high: 105.0 + i as f64,
+                    low: 95.0 + i as f64,
+                    close: 102.0 + i as f64,
+                    volume: 1000.0 + i as f64,
+                };
+                (candle.time, candle)
             })
             .collect()
     }
