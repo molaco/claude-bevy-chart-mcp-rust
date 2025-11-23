@@ -110,7 +110,7 @@ pub fn handle_mouse_input(
 
             // Store values before mutable borrow
             let total_area = chart.total_area;
-            let visible_candle_count = chart.visible_candle_count;
+            let visible_candle_count = chart.visible_candle_count();
 
             // Recalculate layouts
             calculate_pane_layouts(&mut chart.panes, total_area, visible_candle_count);
@@ -144,36 +144,47 @@ pub fn handle_mouse_input(
     if mouse_button.just_released(MouseButton::Left) {
         interaction.dragging = false;
         // Issue #8 fix: Reset accumulated pan delta when drag ends
-        interaction.accumulated_pan_delta = 0.0;
+        interaction.accumulated_pan_delta = 0;
     }
 
+    // Phase 3: Time-based panning
     if interaction.dragging && !chart.panes.is_empty() {
         let delta_x = interaction.mouse_pos.x - interaction.drag_start_pos.x;
-        let candle_width_px = chart.panes[0].space.effective_candle_width_px;
+        let viewport_width = chart.panes[0].space.viewport.width();
 
-        // Issue #8 fix: Accumulate fractional movement to avoid dead zones
-        // Instead of truncating immediately, we keep track of fractional candles
-        let candle_delta = -delta_x / candle_width_px;
-        interaction.accumulated_pan_delta += candle_delta;
+        // Convert pixel delta to time delta
+        let visible_duration = chart.visible_time_end - chart.visible_time_start;
+        let time_delta = (-delta_x / viewport_width) * visible_duration as f32;
 
-        // Only apply integer movement, keeping the fractional part
-        let candles_moved = interaction.accumulated_pan_delta as i32;
+        // Accumulate fractional time movement
+        interaction.accumulated_pan_delta += time_delta as i64;
 
-        if candles_moved != 0 {
-            // Subtract the integer part, keeping the fractional remainder
-            interaction.accumulated_pan_delta -= candles_moved as f32;
+        // Get timeframe interval for snapping
+        let interval_ms = chart.timeframe_interval_ms();
 
-            // Update shared X-axis state
-            let new_start = (chart.visible_candle_start as i32 + candles_moved).max(0) as usize;
-            let spacing = right_spacing_candles(chart.visible_candle_count);
-            chart.visible_candle_start = new_start
-                .min((chart.candles.len() + spacing).saturating_sub(chart.visible_candle_count));
+        // Apply movement with snapping to timeframe intervals
+        if interaction.accumulated_pan_delta.abs() >= interval_ms {
+            let snapped_delta = (interaction.accumulated_pan_delta / interval_ms) * interval_ms;
+            interaction.accumulated_pan_delta -= snapped_delta;
+
+            // Calculate bounds
+            let earliest = chart.candles.keys().next().copied().unwrap_or(0);
+            let latest = chart.candles.keys().next_back().copied().unwrap_or(0);
+
+            // Apply time shift with bounds checking
+            let new_start = (chart.visible_time_start + snapped_delta)
+                .max(earliest)
+                .min(latest - visible_duration / 2);
+            let new_end = new_start + visible_duration;
+
+            chart.visible_time_start = new_start;
+            chart.visible_time_end = new_end;
 
             // Update Y-axis bounds for all panes
             update_pane_bounds(&mut chart, config.volume_y_axis_padding);
 
             // Recalculate cached values for all panes after pan
-            let visible_candle_count = chart.visible_candle_count;
+            let visible_candle_count = chart.visible_candle_count();
             let agg_level = agg_state.current_level;
             let aggregated_count = if agg_level != crate::aggregation::AggregationLevel::None {
                 visible_candle_count / agg_level.ratio()
@@ -188,43 +199,53 @@ pub fn handle_mouse_input(
             render_cache.clear_all();
 
             chart.needs_redraw = true;
-            interaction.drag_start_pos = interaction.mouse_pos;
         }
+
+        interaction.drag_start_pos = interaction.mouse_pos;
     }
 
-    // Zoom: Mouse wheel
+    // Phase 3: Time-based zoom (mouse wheel)
     for event in mouse_wheel.read() {
         if mouse_in_pane && !chart.panes.is_empty() {
             let zoom_factor = if event.y > 0.0 { 0.9 } else { 1.1 };
 
-            // Calculate focus candle using first pane
-            let (focus_candle, _) = chart.panes[0].space.from_world(
+            // Get timestamp at mouse position (zoom focus point)
+            let (focus_time, _) = chart.panes[0].space.from_world(
                 interaction.mouse_pos,
-                chart.visible_candle_start,
-                chart.visible_candle_count,
+                chart.visible_time_start,
+                chart.visible_time_end,
             );
 
-            // Update shared X-axis state (zoom)
-            let old_count = chart.visible_candle_count;
-            let max_zoom = zoom_limit_config.max_for_timeframe(&chart.timeframe) as f32;
-            let new_count = ((old_count as f32 * zoom_factor)
-                .clamp(zoom_limit_config.global_min as f32, max_zoom) as usize)
-                .min(chart.candles.len());
+            // Calculate new duration
+            let old_duration = chart.visible_time_end - chart.visible_time_start;
+            let new_duration = (old_duration as f64 * zoom_factor as f64) as i64;
 
-            let focus_offset = focus_candle.saturating_sub(chart.visible_candle_start);
-            let focus_percent = focus_offset as f32 / old_count as f32;
+            // Clamp duration to min/max
+            let interval_ms = chart.timeframe_interval_ms();
+            let min_duration = interval_ms * zoom_limit_config.global_min as i64;
+            let max_duration = interval_ms * zoom_limit_config.max_for_timeframe(&chart.timeframe) as i64;
+            let clamped_duration = new_duration.clamp(min_duration, max_duration);
 
-            let spacing = right_spacing_candles(new_count);
-            chart.visible_candle_start = focus_candle
-                .saturating_sub((new_count as f32 * focus_percent) as usize)
-                .min((chart.candles.len() + spacing).saturating_sub(new_count));
-            chart.visible_candle_count = new_count;
+            // Calculate focus percentage (where in the visible range is the mouse?)
+            let focus_percent = (focus_time - chart.visible_time_start) as f64
+                / old_duration as f64;
+
+            // Calculate new start/end maintaining focus point
+            let new_start = focus_time - (clamped_duration as f64 * focus_percent) as i64;
+            let new_end = new_start + clamped_duration;
+
+            // Apply bounds
+            let earliest = chart.candles.keys().next().copied().unwrap_or(0);
+            let latest = chart.candles.keys().next_back().copied().unwrap_or(0);
+
+            chart.visible_time_start = new_start.max(earliest);
+            chart.visible_time_end = new_end.min(latest + interval_ms * 10); // Allow some right space
 
             // Update Y-axis bounds for all panes
             update_pane_bounds(&mut chart, config.volume_y_axis_padding);
 
             // Recalculate cached values for all panes after zoom
-            let visible_candle_count = chart.visible_candle_count;
+            let visible_candle_count = chart.visible_candle_count();
             let agg_level = agg_state.current_level;
             let aggregated_count = if agg_level != crate::aggregation::AggregationLevel::None {
                 visible_candle_count / agg_level.ratio()
@@ -241,8 +262,10 @@ pub fn handle_mouse_input(
             chart.needs_redraw = true;
 
             println!(
-                "Zoomed: showing {} candles starting from {}",
-                chart.visible_candle_count, chart.visible_candle_start
+                "Zoomed: showing {} to {} ({} candles)",
+                chart.visible_time_start,
+                chart.visible_time_end,
+                chart.visible_candle_count()
             );
         }
     }
@@ -250,6 +273,7 @@ pub fn handle_mouse_input(
 
 /// Check if lazy loading is needed and queue data for next-frame application
 /// Uses deferred updates pattern to prevent 1-frame rendering glitches
+/// Phase 3: Time-based lazy loading
 pub fn check_lazy_load(
     mut chart: ResMut<Chart>,
     mut deferred: ResMut<DeferredUpdates>,
@@ -260,80 +284,68 @@ pub fn check_lazy_load(
         return;
     }
 
-    let start_idx = chart.visible_candle_start;
-    let end_idx = start_idx + chart.visible_candle_count;
+    let interval_ms = chart.timeframe_interval_ms();
+    let buffer_time = interval_ms * 20; // 20 candles worth of buffer
 
-    // Load more historical data when scrolling left
-    if start_idx < 20 && chart.candles.first_key_value().is_some() {
-        chart.load_status = ChartLoadStatus::Loading;
+    // Load more historical data when scrolling left (close to earliest data)
+    if let Some((&earliest_time, _)) = chart.candles.first_key_value() {
+        if chart.visible_time_start < earliest_time + buffer_time {
+            chart.load_status = ChartLoadStatus::Loading;
 
-        let load_count = 100;
-        let load_end_time = chart.candles.first_key_value().unwrap().1.time;
+            let load_count = 100;
+            let load_end_time = earliest_time;
+            let load_start_time = load_end_time - (load_count as i64 * interval_ms);
 
-        // Calculate start time based on timeframe
-        let interval_ms = match chart.timeframe.as_str() {
-            "15m" => 15 * 60 * 1000,
-            "1h" => 60 * 60 * 1000,
-            "4h" => 4 * 60 * 60 * 1000,
-            "1d" => 24 * 60 * 60 * 1000,
-            _ => 60 * 60 * 1000,
-        };
-        let load_start_time = load_end_time - (load_count as i64 * interval_ms);
+            if let Ok(new_candles) = db.load_candles(
+                chart.ticker_id,
+                &chart.timeframe,
+                load_start_time,
+                load_end_time - 1, // Exclude the first candle we already have
+            ) {
+                if !new_candles.is_empty() {
+                    println!("Lazy loaded {} historical candles (deferred)", new_candles.len());
 
-        if let Ok(new_candles) = db.load_candles(
-            chart.ticker_id,
-            &chart.timeframe,
-            load_start_time,
-            load_end_time - 1, // Exclude the first candle we already have
-        ) {
-            if !new_candles.is_empty() {
-                println!("Lazy loaded {} historical candles (deferred)", new_candles.len());
-
-                // Queue for next-frame application instead of immediate update
-                deferred.candles_to_prepend = Some(new_candles);
-                deferred.invalidate_aggregation = true;
-                chart.load_status = ChartLoadStatus::PendingApply;
+                    // Queue for next-frame application instead of immediate update
+                    deferred.candles_to_prepend = Some(new_candles);
+                    deferred.invalidate_aggregation = true;
+                    chart.load_status = ChartLoadStatus::PendingApply;
+                } else {
+                    chart.load_status = ChartLoadStatus::Ready;
+                }
             } else {
                 chart.load_status = ChartLoadStatus::Ready;
             }
-        } else {
-            chart.load_status = ChartLoadStatus::Ready;
+            return; // Don't check append in the same frame
         }
-        return; // Don't check append in the same frame
     }
 
-    // Load more recent data when scrolling right
-    if end_idx > chart.candles.len().saturating_sub(20) && chart.candles.last_key_value().is_some() {
-        chart.load_status = ChartLoadStatus::Loading;
+    // Load more recent data when scrolling right (close to latest data)
+    if let Some((&latest_time, _)) = chart.candles.last_key_value() {
+        if chart.visible_time_end > latest_time - buffer_time {
+            chart.load_status = ChartLoadStatus::Loading;
 
-        let load_start_time = chart.candles.last_key_value().unwrap().1.time;
-        let interval_ms = match chart.timeframe.as_str() {
-            "15m" => 15 * 60 * 1000,
-            "1h" => 60 * 60 * 1000,
-            "4h" => 4 * 60 * 60 * 1000,
-            "1d" => 24 * 60 * 60 * 1000,
-            _ => 60 * 60 * 1000,
-        };
-        let load_end_time = load_start_time + (100 * interval_ms);
+            let load_start_time = latest_time;
+            let load_end_time = load_start_time + (100 * interval_ms);
 
-        if let Ok(new_candles) = db.load_candles(
-            chart.ticker_id,
-            &chart.timeframe,
-            load_start_time + 1, // Exclude the last candle we already have
-            load_end_time,
-        ) {
-            if !new_candles.is_empty() {
-                println!("Lazy loaded {} recent candles (deferred)", new_candles.len());
+            if let Ok(new_candles) = db.load_candles(
+                chart.ticker_id,
+                &chart.timeframe,
+                load_start_time + 1, // Exclude the last candle we already have
+                load_end_time,
+            ) {
+                if !new_candles.is_empty() {
+                    println!("Lazy loaded {} recent candles (deferred)", new_candles.len());
 
-                // Queue for next-frame application instead of immediate update
-                deferred.candles_to_append = Some(new_candles);
-                deferred.invalidate_aggregation = true;
-                chart.load_status = ChartLoadStatus::PendingApply;
+                    // Queue for next-frame application instead of immediate update
+                    deferred.candles_to_append = Some(new_candles);
+                    deferred.invalidate_aggregation = true;
+                    chart.load_status = ChartLoadStatus::PendingApply;
+                } else {
+                    chart.load_status = ChartLoadStatus::Ready;
+                }
             } else {
                 chart.load_status = ChartLoadStatus::Ready;
             }
-        } else {
-            chart.load_status = ChartLoadStatus::Ready;
         }
     }
 }
@@ -360,8 +372,8 @@ pub fn apply_deferred_updates(
             chart.candles.insert(candle.time, candle);
         }
 
-        // Adjust visible_start to maintain view
-        chart.visible_candle_start += new_len;
+        // Phase 3: No need to adjust visible_time_start/end when prepending
+        // The time window stays the same, just more historical data is available
 
         // INCREMENTAL: Only calculate MA for NEW candles
         // Use index-based iteration to avoid borrow issues
@@ -466,7 +478,7 @@ pub fn toggle_volume_pane(
                     PaneType::Volume,
                     0.3, // 30% height
                     Rect::default(),
-                    chart.visible_candle_count,
+                    chart.visible_candle_count(),
                 );
                 chart.panes.push(volume_pane);
 
@@ -499,7 +511,7 @@ pub fn toggle_volume_pane(
 
         // Recalculate pane layouts
         let total_area = chart.total_area;
-        let visible_candle_count = chart.visible_candle_count;
+        let visible_candle_count = chart.visible_candle_count();
         calculate_pane_layouts(&mut chart.panes, total_area, visible_candle_count);
 
         // Update Y-axis bounds for all panes

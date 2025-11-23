@@ -51,20 +51,22 @@ impl ChartSpace {
         space
     }
 
-    /// Map candle index and price to world coordinates
+    /// Map timestamp and price to world coordinates
     pub fn to_world(
         &self,
-        candle_index: usize,
+        timestamp: i64,
         price: f32,
-        visible_candle_start: usize,
-        visible_candle_count: usize,
+        time_start: i64,
+        time_end: i64,
     ) -> Vec2 {
-        // Map candle index relative to visible range
-        let candle_offset = candle_index.saturating_sub(visible_candle_start);
-        let x_percent = candle_offset as f32 / visible_candle_count as f32;
-        let world_x = self.viewport.min.x + x_percent * self.viewport.width();
+        let time_range = (time_end - time_start) as f32;
+        let t = if time_range > 0.0 {
+            (timestamp - time_start) as f32 / time_range
+        } else {
+            0.5
+        };
+        let world_x = self.viewport.min.x + t * self.viewport.width();
 
-        // Map price to viewport
         let price_range = self.visible_price_max - self.visible_price_min;
         let price_percent = if price_range > 0.0 {
             (price - self.visible_price_min) / price_range
@@ -76,26 +78,28 @@ impl ChartSpace {
         Vec2::new(world_x, world_y)
     }
 
-    /// Map candle index and price to world coordinates with custom Y-axis bounds
+    /// Map timestamp and value to world coordinates with custom Y-axis bounds
     ///
     /// This method allows specifying custom min/max Y values for scaling,
     /// useful when rendering with different Y-axis ranges than the pane's
     /// visible_price_min/max (e.g., for volume bars with aggregated data).
     pub fn to_world_with_y_range(
         &self,
-        candle_index: usize,
+        timestamp: i64,
         value: f32,
-        visible_candle_start: usize,
-        visible_candle_count: usize,
+        time_start: i64,
+        time_end: i64,
         y_min: f32,
         y_max: f32,
     ) -> Vec2 {
-        // Map candle index relative to visible range (same as to_world)
-        let candle_offset = candle_index.saturating_sub(visible_candle_start);
-        let x_percent = candle_offset as f32 / visible_candle_count as f32;
-        let world_x = self.viewport.min.x + x_percent * self.viewport.width();
+        let time_range = (time_end - time_start) as f32;
+        let t = if time_range > 0.0 {
+            (timestamp - time_start) as f32 / time_range
+        } else {
+            0.5
+        };
+        let world_x = self.viewport.min.x + t * self.viewport.width();
 
-        // Map value to viewport using custom Y range
         let y_range = y_max - y_min;
         let y_percent = if y_range > 0.0 {
             (value - y_min) / y_range
@@ -107,62 +111,50 @@ impl ChartSpace {
         Vec2::new(world_x, world_y)
     }
 
-    /// Map world coordinates to candle index and price
+    /// Map world coordinates to timestamp and price
     pub fn from_world(
         &self,
         world_pos: Vec2,
-        visible_candle_start: usize,
-        visible_candle_count: usize,
-    ) -> (usize, f32) {
+        time_start: i64,
+        time_end: i64,
+    ) -> (i64, f32) {
         let x_percent = (world_pos.x - self.viewport.min.x) / self.viewport.width();
-        let candle_index =
-            visible_candle_start + (x_percent * visible_candle_count as f32) as usize;
+        let time_range = time_end - time_start;
+        let timestamp = time_start + (x_percent * time_range as f32) as i64;
 
         let y_percent = (world_pos.y - self.viewport.min.y) / self.viewport.height();
-        let price =
-            self.visible_price_min + y_percent * (self.visible_price_max - self.visible_price_min);
+        let price = self.visible_price_min
+            + y_percent * (self.visible_price_max - self.visible_price_min);
 
-        (candle_index, price)
+        (timestamp, price)
     }
 
     /// Fit price bounds to visible candles
     pub fn fit_price_bounds(
         &mut self,
         candles: &BTreeMap<i64, Candle>,
-        visible_candle_start: usize,
-        visible_candle_count: usize,
+        time_start: i64,
+        time_end: i64,
     ) {
-        if candles.is_empty() {
-            return;
-        }
+        let visible = candles.range(time_start..=time_end);
 
-        let start = visible_candle_start;
-        let end = (start + visible_candle_count).min(candles.len());
-
-        if start >= end {
-            return;
-        }
-
-        let visible_candles: Vec<&Candle> = candles.values()
-            .skip(start)
-            .take(end - start)
-            .collect();
         let mut min_price = f64::MAX;
         let mut max_price = f64::MIN;
 
-        for candle in visible_candles {
+        for (_, candle) in visible {
             min_price = min_price.min(candle.low);
             max_price = max_price.max(candle.high);
         }
 
-        // Add padding
+        if min_price == f64::MAX {
+            return;
+        }
+
         let range = max_price - min_price;
         let padding = range * self.price_padding as f64;
 
         self.visible_price_min = (min_price - padding) as f32;
         self.visible_price_max = (max_price + padding) as f32;
-
-        self.recalculate_cache(visible_candle_count, AggregationLevel::None, visible_candle_count);
     }
 
     /// Fit price bounds to visible candles AND indicator values (Option B)
@@ -170,45 +162,41 @@ impl ChartSpace {
         &mut self,
         candles: &BTreeMap<i64, Candle>,
         indicators: &[MovingAverage],
-        visible_candle_start: usize,
-        visible_candle_count: usize,
+        time_start: i64,
+        time_end: i64,
     ) {
-        if candles.is_empty() {
-            return;
-        }
+        let visible = candles.range(time_start..=time_end);
 
-        let start = visible_candle_start;
-        let end = (start + visible_candle_count).min(candles.len());
-
-        if start >= end {
-            return;
-        }
-
-        let visible_candles: Vec<&Candle> = candles.values()
-            .skip(start)
-            .take(end - start)
-            .collect();
         let mut min_price = f64::MAX;
         let mut max_price = f64::MIN;
 
         // Include candle highs and lows
-        for candle in visible_candles {
+        // Also collect indices for indicator lookup
+        let mut visible_indices: Vec<usize> = Vec::new();
+        for (idx, (_, candle)) in visible.enumerate() {
             min_price = min_price.min(candle.low);
             max_price = max_price.max(candle.high);
+            visible_indices.push(idx);
         }
 
         // Include visible indicator values
+        // Note: indicators still use index-based values - this will need to be
+        // updated in a later phase when indicators are converted to time-based
         for indicator in indicators {
             if !indicator.visible {
                 continue;
             }
 
-            for i in start..end {
-                if let Some(value) = indicator.values.get(i).and_then(|v| *v) {
+            for &idx in &visible_indices {
+                if let Some(value) = indicator.values.get(idx).and_then(|v| *v) {
                     min_price = min_price.min(value as f64);
                     max_price = max_price.max(value as f64);
                 }
             }
+        }
+
+        if min_price == f64::MAX {
+            return;
         }
 
         // Add padding
@@ -217,41 +205,26 @@ impl ChartSpace {
 
         self.visible_price_min = (min_price - padding) as f32;
         self.visible_price_max = (max_price + padding) as f32;
-
-        self.recalculate_cache(visible_candle_count, AggregationLevel::None, visible_candle_count);
     }
 
     /// Fit volume bounds to visible candles
     pub fn fit_volume_bounds(
         &mut self,
         candles: &BTreeMap<i64, Candle>,
-        visible_candle_start: usize,
-        visible_candle_count: usize,
+        time_start: i64,
+        time_end: i64,
         volume_y_axis_padding: f32,
     ) {
-        if candles.is_empty() {
-            return;
-        }
+        let visible = candles.range(time_start..=time_end);
 
-        let start = visible_candle_start;
-        let end = (start + visible_candle_count).min(candles.len());
-
-        if start >= end {
-            return;
-        }
-
-        let max_volume = candles.values()
-            .skip(start)
-            .take(end - start)
-            .map(|c| c.volume)
+        let max_volume = visible
+            .map(|(_, c)| c.volume)
             .max_by(|a, b| a.partial_cmp(b).unwrap())
             .unwrap_or(1.0);
 
         // Add top padding so volume bars don't touch the pane ceiling
         self.visible_price_min = 0.0;
         self.visible_price_max = (max_volume * volume_y_axis_padding as f64) as f32;
-
-        self.recalculate_cache(visible_candle_count, AggregationLevel::None, visible_candle_count);
     }
 
     /// Recalculate cached values
@@ -619,9 +592,9 @@ pub struct Chart {
     pub candles: BTreeMap<i64, Candle>, // Loaded candles keyed by timestamp (O(log n) lookups)
     pub candle_offset: usize, // Global offset (for lazy loading)
 
-    // SHARED X-axis state (synchronized across all panes)
-    pub visible_candle_start: usize,
-    pub visible_candle_count: usize,
+    // SHARED X-axis state (synchronized across all panes) - TIME-BASED
+    pub visible_time_start: i64,  // Unix timestamp ms
+    pub visible_time_end: i64,    // Unix timestamp ms
 
     // Multi-pane support
     pub panes: Vec<Pane>,
@@ -640,6 +613,43 @@ pub struct Chart {
 }
 
 impl Chart {
+    /// Get timeframe interval in milliseconds
+    pub fn timeframe_interval_ms(&self) -> i64 {
+        match self.timeframe.as_str() {
+            "1m" => 60 * 1000,
+            "3m" => 3 * 60 * 1000,
+            "5m" => 5 * 60 * 1000,
+            "15m" => 15 * 60 * 1000,
+            "30m" => 30 * 60 * 1000,
+            "1h" => 60 * 60 * 1000,
+            "2h" => 2 * 60 * 60 * 1000,
+            "4h" => 4 * 60 * 60 * 1000,
+            "6h" => 6 * 60 * 60 * 1000,
+            "8h" => 8 * 60 * 60 * 1000,
+            "12h" => 12 * 60 * 60 * 1000,
+            "1d" => 24 * 60 * 60 * 1000,
+            "3d" => 3 * 24 * 60 * 60 * 1000,
+            "1w" => 7 * 24 * 60 * 60 * 1000,
+            "1M" => 30 * 24 * 60 * 60 * 1000, // Approximate
+            _ => 60 * 60 * 1000, // Default 1h
+        }
+    }
+
+    /// Get visible duration in milliseconds
+    pub fn visible_duration(&self) -> i64 {
+        self.visible_time_end - self.visible_time_start
+    }
+
+    /// Get candles in visible time range
+    pub fn visible_candles(&self) -> impl Iterator<Item = (&i64, &Candle)> {
+        self.candles.range(self.visible_time_start..=self.visible_time_end)
+    }
+
+    /// Count candles in visible range (for LOD calculations)
+    pub fn visible_candle_count(&self) -> usize {
+        self.candles.range(self.visible_time_start..=self.visible_time_end).count()
+    }
+
     /// Get candles in a time range (O(log n) query)
     pub fn candles_in_range(&self, start: i64, end: i64) -> impl Iterator<Item = (&i64, &Candle)> {
         self.candles.range(start..=end)
@@ -705,32 +715,38 @@ pub fn right_spacing_candles(visible_candle_count: usize) -> usize {
     visible_candle_count / 3
 }
 
+/// Calculate right spacing as time duration (Phase 3)
+/// Returns approximately 1/3 of the visible time duration
+pub fn right_spacing_duration(visible_duration: i64) -> i64 {
+    visible_duration / 3
+}
+
 /// Update Y-axis bounds for all panes based on their type
 pub fn update_pane_bounds(chart: &mut Chart, volume_y_axis_padding: f32) {
-    // Collect shared data to avoid borrow conflicts
     let candles = &chart.candles;
     let indicators = &chart.indicators;
-    let visible_start = chart.visible_candle_start;
-    let visible_count = chart.visible_candle_count;
+    let time_start = chart.visible_time_start;
+    let time_end = chart.visible_time_end;
 
     for pane in chart.panes.iter_mut() {
         match pane.pane_type {
             PaneType::Price => {
-                // Use Option B: expand Y-axis to include indicator values
                 pane.space.fit_price_bounds_with_indicators(
                     candles,
                     indicators,
-                    visible_start,
-                    visible_count,
+                    time_start,
+                    time_end,
                 );
             }
             PaneType::Volume => {
-                pane.space
-                    .fit_volume_bounds(candles, visible_start, visible_count, volume_y_axis_padding);
+                pane.space.fit_volume_bounds(
+                    candles,
+                    time_start,
+                    time_end,
+                    volume_y_axis_padding
+                );
             }
-            PaneType::Indicator { .. } => {
-                // TODO: Handle indicators when implemented
-            }
+            PaneType::Indicator { .. } => {}
         }
     }
 }
@@ -882,16 +898,16 @@ pub struct InteractionState {
     pub dragging: bool,
     pub drag_start_pos: Vec2,
 
-    // Pan fractional accumulation (Issue #8 fix)
-    pub accumulated_pan_delta: f32,  // Accumulates fractional candle movement for smooth panning
+    // Pan fractional accumulation (Issue #8 fix) - TIME-BASED (Phase 3)
+    pub accumulated_pan_delta: i64,  // Accumulates time delta in milliseconds for smooth panning
 
     // Pane resize state
     pub hover_resize_gap: Option<usize>, // Which gap is being hovered
     pub resizing_gap: Option<usize>,     // Which gap is being dragged
     pub resize_start_heights: Vec<f32>,  // Original height_percent values
 
-    // Crosshair optimization: track last candle to debounce text updates
-    pub last_crosshair_candle_index: Option<usize>,
+    // Crosshair optimization: track last candle timestamp to debounce text updates
+    pub last_crosshair_candle_timestamp: Option<i64>,
     // Track last mouse position to avoid redundant crosshair updates
     pub last_crosshair_mouse_pos: Vec2,
     // Cache crosshair visibility state to avoid redundant ECS updates
@@ -989,18 +1005,18 @@ pub struct CrosshairEntities {
 /// Component to identify candlestick parts
 #[derive(Component)]
 pub struct CandlestickWick {
-    pub candle_index: usize,
+    pub candle_timestamp: i64,
 }
 
 #[derive(Component)]
 pub struct CandlestickBody {
-    pub candle_index: usize,
+    pub candle_timestamp: i64,
 }
 
 /// Component to identify volume bars
 #[derive(Component)]
 pub struct VolumeBar {
-    pub candle_index: usize,
+    pub candle_timestamp: i64,
 }
 
 /// Marker component for chart elements
@@ -1045,13 +1061,13 @@ pub enum CandleLODLevel {
 /// Marker component for OHLC line entities (Medium LOD)
 #[derive(Component)]
 pub struct CandlestickOHLCLine {
-    pub candle_index: usize,
+    pub candle_timestamp: i64,
 }
 
 /// Marker component for range line entities (Low LOD)
 #[derive(Component)]
 pub struct CandlestickRangeLine {
-    pub candle_index: usize,
+    pub candle_timestamp: i64,
 }
 
 /// Configuration for LOD system

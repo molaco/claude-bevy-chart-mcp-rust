@@ -95,82 +95,38 @@ pub fn render_candlesticks(
     >,
     mut pooled_query: Query<&mut PooledEntity>,
 ) {
-    if !chart.needs_redraw {
+    if !chart.needs_redraw || chart.load_status != ChartLoadStatus::Ready {
         return;
     }
 
-    // Skip rendering if data is being loaded or pending application
-    // This prevents rendering with stale or inconsistent data
-    if chart.load_status != ChartLoadStatus::Ready {
-        return;
-    }
-
-    // Find the Price pane
     let price_pane = chart.panes.iter().find(|p| matches!(p.id, PaneId::Price));
-
     if price_pane.is_none() {
         return;
     }
     let price_pane = price_pane.unwrap();
 
-    // Collect candles as a Vec for slice-based operations (BTreeMap doesn't support slicing)
-    let candles_vec: Vec<Candle> = chart.candles.values().cloned().collect();
+    let time_start = chart.visible_time_start;
+    let time_end = chart.visible_time_end;
 
-    // Get shared X-axis state
-    let start = chart.visible_candle_start;
-    let candle_count = candles_vec.len();
-    let end = (start + chart.visible_candle_count).min(candle_count);
-
-    if start >= end || candle_count == 0 {
+    // Count visible candles for LOD calculation
+    let visible_count = chart.candles.range(time_start..=time_end).count();
+    if visible_count == 0 {
         return;
     }
+
+    // Determine LOD level based on candle width
+    let candle_width_px = price_pane.space.viewport.width() / visible_count as f32;
+    let lod_level = calculate_lod_level(candle_width_px, &config);
 
     // Determine if aggregation is needed
     let level = if agg_config.enabled {
         agg_state.get_stable_level(
-            chart.visible_candle_count,
+            visible_count,
             agg_config.max_renderable_candles,
         )
     } else {
         AggregationLevel::None
     };
-
-    // Get aggregated data if needed (must live for entire function)
-    let aggregated_data;
-    let (candles_to_render, index_mapping_offset, aligned_start) = if level != AggregationLevel::None {
-        aggregated_data = agg_cache.get_or_aggregate(
-            &chart.timeframe,
-            &chart.candles,
-            start,
-            chart.visible_candle_count,
-            level,
-        );
-
-        #[cfg(debug_assertions)]
-        println!(
-            "Aggregation: {:?} ({}:1) - {} -> {} candles",
-            level,
-            level.ratio(),
-            chart.visible_candle_count,
-            aggregated_data.candles.len()
-        );
-
-        // Return aggregated candles with offset 0 and aligned start for stable positioning
-        (aggregated_data.candles.as_slice(), 0_usize, aggregated_data.source_range.0)
-    } else {
-        // No aggregation needed
-        (&candles_vec[start..end], start, start)
-    };
-
-    // Determine LOD level based on candle width
-    // Use aggregated candle count for width calculation if aggregation is active
-    let effective_candle_count = if level != AggregationLevel::None {
-        candles_to_render.len().max(1)
-    } else {
-        chart.visible_candle_count.max(1)
-    };
-    let candle_width_px = price_pane.space.viewport.width() / effective_candle_count as f32;
-    let lod_level = calculate_lod_level(candle_width_px, &config);
 
     // Track if we cleared pools this frame
     // Use level_changed_this_frame flag to ensure ALL rendering systems see the same state
@@ -227,27 +183,27 @@ pub fn render_candlesticks(
         false  // No clearing happened
     };
 
-    // Collect existing entities by candle_index
+    // Collect existing entities by candle_timestamp
     use std::collections::HashMap;
-    let mut existing_wicks: HashMap<usize, Entity> = HashMap::new();
-    let mut existing_bodies: HashMap<usize, Entity> = HashMap::new();
-    let mut existing_ohlc: HashMap<usize, Entity> = HashMap::new();
-    let mut existing_range: HashMap<usize, Entity> = HashMap::new();
+    let mut existing_wicks: HashMap<i64, Entity> = HashMap::new();
+    let mut existing_bodies: HashMap<i64, Entity> = HashMap::new();
+    let mut existing_ohlc: HashMap<i64, Entity> = HashMap::new();
+    let mut existing_range: HashMap<i64, Entity> = HashMap::new();
 
     // Only collect existing entities if aggregation level hasn't changed
-    // If level changed, all entities were just cleared and have stale indices
+    // If level changed, all entities were just cleared and have stale timestamps
     if !pools_just_cleared {
         for (entity, wick, _, _, _) in query_wicks.iter() {
-            existing_wicks.insert(wick.candle_index, entity);
+            existing_wicks.insert(wick.candle_timestamp, entity);
         }
         for (entity, body, _, _, _) in query_bodies.iter() {
-            existing_bodies.insert(body.candle_index, entity);
+            existing_bodies.insert(body.candle_timestamp, entity);
         }
         for (entity, ohlc, _, _, _) in query_ohlc.iter() {
-            existing_ohlc.insert(ohlc.candle_index, entity);
+            existing_ohlc.insert(ohlc.candle_timestamp, entity);
         }
         for (entity, range_line, _, _, _) in query_range.iter() {
-            existing_range.insert(range_line.candle_index, entity);
+            existing_range.insert(range_line.candle_timestamp, entity);
         }
     }
 
@@ -263,7 +219,7 @@ pub fn render_candlesticks(
 
     // Track rendering operations for gap detection
     #[cfg(debug_assertions)]
-    let mut rendered_indices = Vec::new();
+    let mut rendered_timestamps = Vec::new();
     #[cfg(debug_assertions)]
     let mut pool_get_success = 0;
     #[cfg(debug_assertions)]
@@ -273,32 +229,17 @@ pub fn render_candlesticks(
     #[cfg(debug_assertions)]
     let mut entity_reused = 0;
 
-    // Process each visible candle based on LOD level
-    for (idx, candle) in candles_to_render.iter().enumerate() {
-        // Map aggregated index to original world space
-        let i = if level != AggregationLevel::None {
-            // Each aggregated candle represents a group of `ratio` source candles.
-            // The aggregated candle's timestamp is from the first candle in the group,
-            // but we want to position it at the CENTER of the group for visual accuracy.
-            //
-            // Use aligned_start to ensure stable positioning during panning
-            // aligned_start comes from aggregated_data.source_range.0 (globally aligned boundary)
-            // Example with ratio=10, start=1003:
-            //   - aligned_start=1000 (globally aligned boundary)
-            //   - idx=0 represents candles [1000-1009], centered at 1005
-            //   - idx=1 represents candles [1010-1019], centered at 1015
-            aligned_start + (idx * level.ratio()) + level.center_offset()
-        } else {
-            index_mapping_offset + idx
-        };
+    // DIRECT ITERATION - no Vec allocation
+    for (timestamp, candle) in chart.candles.range(time_start..=time_end) {
+        let ts = *timestamp;
 
         #[cfg(debug_assertions)]
-        rendered_indices.push(i);
+        rendered_timestamps.push(ts);
 
         match lod_level {
             CandleLODLevel::Full => {
                 // Full detail: render wick + body (hide LOD entities if they exist)
-                if let Some(&entity) = existing_ohlc.get(&i) {
+                if let Some(&entity) = existing_ohlc.get(&ts) {
                     if let Ok((_, _, _, _, mut visibility)) = query_ohlc.get_mut(entity) {
                         *visibility = Visibility::Hidden;
                         pools.ohlc_lines.return_entity(entity, PooledEntityType::CandlestickOHLC);
@@ -307,7 +248,7 @@ pub fn render_candlesticks(
                         }
                     }
                 }
-                if let Some(&entity) = existing_range.get(&i) {
+                if let Some(&entity) = existing_range.get(&ts) {
                     if let Ok((_, _, _, _, mut visibility)) = query_range.get_mut(entity) {
                         *visibility = Visibility::Hidden;
                         pools.range_lines.return_entity(entity, PooledEntityType::CandlestickRange);
@@ -318,30 +259,10 @@ pub fn render_candlesticks(
                 }
 
                 // Calculate positions using ChartSpace::to_world()
-                let wick_bottom = price_pane.space.to_world(
-                    i,
-                    candle.low as f32,
-                    chart.visible_candle_start,
-                    chart.visible_candle_count,
-                );
-                let wick_top = price_pane.space.to_world(
-                    i,
-                    candle.high as f32,
-                    chart.visible_candle_start,
-                    chart.visible_candle_count,
-                );
-                let body_open = price_pane.space.to_world(
-                    i,
-                    candle.open as f32,
-                    chart.visible_candle_start,
-                    chart.visible_candle_count,
-                );
-                let body_close = price_pane.space.to_world(
-                    i,
-                    candle.close as f32,
-                    chart.visible_candle_start,
-                    chart.visible_candle_count,
-                );
+                let wick_bottom = price_pane.space.to_world(ts, candle.low as f32, time_start, time_end);
+                let wick_top = price_pane.space.to_world(ts, candle.high as f32, time_start, time_end);
+                let body_open = price_pane.space.to_world(ts, candle.open as f32, time_start, time_end);
+                let body_close = price_pane.space.to_world(ts, candle.close as f32, time_start, time_end);
 
                 let wick_center = Vec2::new(
                     (wick_bottom.x + wick_top.x) / 2.0,
@@ -350,7 +271,7 @@ pub fn render_candlesticks(
                 let wick_height = (wick_top.y - wick_bottom.y).abs().max(1.0);
 
                 // UPDATE or GET FROM POOL wick entity
-                if let Some(&entity) = existing_wicks.get(&i) {
+                if let Some(&entity) = existing_wicks.get(&ts) {
                     #[cfg(debug_assertions)]
                     { entity_reused += 1; }
 
@@ -371,7 +292,7 @@ pub fn render_candlesticks(
                     if let Ok((_, mut wick, mut transform, mut sprite, mut visibility)) =
                         query_wicks.get_mut(entity)
                     {
-                        wick.candle_index = i;
+                        wick.candle_timestamp = ts;
                         transform.translation = wick_center.extend(0.0);
                         if let Some(ref mut size) = sprite.custom_size {
                             *size = Vec2::new(1.0, wick_height);
@@ -399,7 +320,7 @@ pub fn render_candlesticks(
                                     ..default()
                                 },
                                 Transform::from_translation(wick_center.extend(0.0)),
-                                CandlestickWick { candle_index: i },
+                                CandlestickWick { candle_timestamp: ts },
                                 PooledEntity {
                                     entity_type: PooledEntityType::CandlestickWick,
                                     in_use: true,
@@ -429,7 +350,7 @@ pub fn render_candlesticks(
                                 ..default()
                             },
                             Transform::from_translation(wick_center.extend(0.0)),
-                            CandlestickWick { candle_index: i },
+                            CandlestickWick { candle_timestamp: ts },
                             PooledEntity {
                                 entity_type: PooledEntityType::CandlestickWick,
                                 in_use: true,
@@ -461,7 +382,7 @@ pub fn render_candlesticks(
                 };
 
                 // UPDATE or GET FROM POOL body entity
-                if let Some(&entity) = existing_bodies.get(&i) {
+                if let Some(&entity) = existing_bodies.get(&ts) {
                     if let Ok((_, _, mut transform, mut sprite, mut visibility)) =
                         query_bodies.get_mut(entity)
                     {
@@ -481,7 +402,7 @@ pub fn render_candlesticks(
                     if let Ok((_, mut body, mut transform, mut sprite, mut visibility)) =
                         query_bodies.get_mut(entity)
                     {
-                        body.candle_index = i;
+                        body.candle_timestamp = ts;
                         transform.translation = body_center.extend(1.0);
                         sprite.color = body_color;
                         if let Some(ref mut size) = sprite.custom_size {
@@ -505,7 +426,7 @@ pub fn render_candlesticks(
                                     ..default()
                                 },
                                 Transform::from_translation(body_center.extend(1.0)),
-                                CandlestickBody { candle_index: i },
+                                CandlestickBody { candle_timestamp: ts },
                                 PooledEntity {
                                     entity_type: PooledEntityType::CandlestickBody,
                                     in_use: true,
@@ -531,7 +452,7 @@ pub fn render_candlesticks(
                                 ..default()
                             },
                             Transform::from_translation(body_center.extend(1.0)),
-                            CandlestickBody { candle_index: i },
+                            CandlestickBody { candle_timestamp: ts },
                             PooledEntity {
                                 entity_type: PooledEntityType::CandlestickBody,
                                 in_use: true,
@@ -551,7 +472,7 @@ pub fn render_candlesticks(
 
             CandleLODLevel::Medium => {
                 // Medium detail: single OHLC line (hide full detail entities if they exist)
-                if let Some(&entity) = existing_wicks.get(&i) {
+                if let Some(&entity) = existing_wicks.get(&ts) {
                     if let Ok((_, _, _, _, mut visibility)) = query_wicks.get_mut(entity) {
                         *visibility = Visibility::Hidden;
                         pools.wicks.return_entity(entity, PooledEntityType::CandlestickWick);
@@ -560,7 +481,7 @@ pub fn render_candlesticks(
                         }
                     }
                 }
-                if let Some(&entity) = existing_bodies.get(&i) {
+                if let Some(&entity) = existing_bodies.get(&ts) {
                     if let Ok((_, _, _, _, mut visibility)) = query_bodies.get_mut(entity) {
                         *visibility = Visibility::Hidden;
                         pools.bodies.return_entity(entity, PooledEntityType::CandlestickBody);
@@ -569,7 +490,7 @@ pub fn render_candlesticks(
                         }
                     }
                 }
-                if let Some(&entity) = existing_range.get(&i) {
+                if let Some(&entity) = existing_range.get(&ts) {
                     if let Ok((_, _, _, _, mut visibility)) = query_range.get_mut(entity) {
                         *visibility = Visibility::Hidden;
                         pools.range_lines.return_entity(entity, PooledEntityType::CandlestickRange);
@@ -579,18 +500,8 @@ pub fn render_candlesticks(
                     }
                 }
 
-                let low_pos = price_pane.space.to_world(
-                    i,
-                    candle.low as f32,
-                    chart.visible_candle_start,
-                    chart.visible_candle_count,
-                );
-                let high_pos = price_pane.space.to_world(
-                    i,
-                    candle.high as f32,
-                    chart.visible_candle_start,
-                    chart.visible_candle_count,
-                );
+                let low_pos = price_pane.space.to_world(ts, candle.low as f32, time_start, time_end);
+                let high_pos = price_pane.space.to_world(ts, candle.high as f32, time_start, time_end);
 
                 let center = Vec2::new(
                     (low_pos.x + high_pos.x) / 2.0,
@@ -605,7 +516,7 @@ pub fn render_candlesticks(
                 };
 
                 // UPDATE or GET FROM POOL OHLC line entity
-                if let Some(&entity) = existing_ohlc.get(&i) {
+                if let Some(&entity) = existing_ohlc.get(&ts) {
                     #[cfg(debug_assertions)]
                     { entity_reused += 1; }
 
@@ -631,7 +542,7 @@ pub fn render_candlesticks(
                     if let Ok((_, mut ohlc, mut transform, mut sprite, mut visibility)) =
                         query_ohlc.get_mut(entity)
                     {
-                        ohlc.candle_index = i;
+                        ohlc.candle_timestamp = ts;
                         transform.translation = center.extend(0.0);
                         sprite.color = color;
                         if let Some(ref mut size) = sprite.custom_size {
@@ -658,7 +569,7 @@ pub fn render_candlesticks(
                                     ..default()
                                 },
                                 Transform::from_translation(center.extend(0.0)),
-                                CandlestickOHLCLine { candle_index: i },
+                                CandlestickOHLCLine { candle_timestamp: ts },
                                 PooledEntity {
                                     entity_type: PooledEntityType::CandlestickOHLC,
                                     in_use: true,
@@ -687,7 +598,7 @@ pub fn render_candlesticks(
                                 ..default()
                             },
                             Transform::from_translation(center.extend(0.0)),
-                            CandlestickOHLCLine { candle_index: i },
+                            CandlestickOHLCLine { candle_timestamp: ts },
                             PooledEntity {
                                 entity_type: PooledEntityType::CandlestickOHLC,
                                 in_use: true,
@@ -707,7 +618,7 @@ pub fn render_candlesticks(
 
             CandleLODLevel::Low => {
                 // Low detail: single range line (hide other entities if they exist)
-                if let Some(&entity) = existing_wicks.get(&i) {
+                if let Some(&entity) = existing_wicks.get(&ts) {
                     if let Ok((_, _, _, _, mut visibility)) = query_wicks.get_mut(entity) {
                         *visibility = Visibility::Hidden;
                         pools.wicks.return_entity(entity, PooledEntityType::CandlestickWick);
@@ -716,7 +627,7 @@ pub fn render_candlesticks(
                         }
                     }
                 }
-                if let Some(&entity) = existing_bodies.get(&i) {
+                if let Some(&entity) = existing_bodies.get(&ts) {
                     if let Ok((_, _, _, _, mut visibility)) = query_bodies.get_mut(entity) {
                         *visibility = Visibility::Hidden;
                         pools.bodies.return_entity(entity, PooledEntityType::CandlestickBody);
@@ -725,7 +636,7 @@ pub fn render_candlesticks(
                         }
                     }
                 }
-                if let Some(&entity) = existing_ohlc.get(&i) {
+                if let Some(&entity) = existing_ohlc.get(&ts) {
                     if let Ok((_, _, _, _, mut visibility)) = query_ohlc.get_mut(entity) {
                         *visibility = Visibility::Hidden;
                         pools.ohlc_lines.return_entity(entity, PooledEntityType::CandlestickOHLC);
@@ -735,18 +646,8 @@ pub fn render_candlesticks(
                     }
                 }
 
-                let low_pos = price_pane.space.to_world(
-                    i,
-                    candle.low as f32,
-                    chart.visible_candle_start,
-                    chart.visible_candle_count,
-                );
-                let high_pos = price_pane.space.to_world(
-                    i,
-                    candle.high as f32,
-                    chart.visible_candle_start,
-                    chart.visible_candle_count,
-                );
+                let low_pos = price_pane.space.to_world(ts, candle.low as f32, time_start, time_end);
+                let high_pos = price_pane.space.to_world(ts, candle.high as f32, time_start, time_end);
 
                 let center = Vec2::new(
                     (low_pos.x + high_pos.x) / 2.0,
@@ -761,7 +662,7 @@ pub fn render_candlesticks(
                 };
 
                 // UPDATE or GET FROM POOL range line entity
-                if let Some(&entity) = existing_range.get(&i) {
+                if let Some(&entity) = existing_range.get(&ts) {
                     #[cfg(debug_assertions)]
                     { entity_reused += 1; }
 
@@ -787,7 +688,7 @@ pub fn render_candlesticks(
                     if let Ok((_, mut range, mut transform, mut sprite, mut visibility)) =
                         query_range.get_mut(entity)
                     {
-                        range.candle_index = i;
+                        range.candle_timestamp = ts;
                         transform.translation = center.extend(0.0);
                         sprite.color = color;
                         if let Some(ref mut size) = sprite.custom_size {
@@ -814,7 +715,7 @@ pub fn render_candlesticks(
                                     ..default()
                                 },
                                 Transform::from_translation(center.extend(0.0)),
-                                CandlestickRangeLine { candle_index: i },
+                                CandlestickRangeLine { candle_timestamp: ts },
                                 PooledEntity {
                                     entity_type: PooledEntityType::CandlestickRange,
                                     in_use: true,
@@ -843,7 +744,7 @@ pub fn render_candlesticks(
                                 ..default()
                             },
                             Transform::from_translation(center.extend(0.0)),
-                            CandlestickRangeLine { candle_index: i },
+                            CandlestickRangeLine { candle_timestamp: ts },
                             PooledEntity {
                                 entity_type: PooledEntityType::CandlestickRange,
                                 in_use: true,
@@ -909,17 +810,13 @@ pub fn render_candlesticks(
 
     #[cfg(debug_assertions)]
     {
-        let level = agg_state.current_level;
         let stats = agg_cache.stats();
         let (wick_total, wick_avail) = pools.wicks.stats();
         let (body_total, body_avail) = pools.bodies.stats();
 
         let mut log_msg = format!(
-            "AGG: {:?} ({}:1) | Rendered: {}/{} | Cache: {:.1}% hit ({}/{}) | Pools: W:{}/{} B:{}/{}",
-            level,
-            level.ratio(),
-            candles_to_render.len(),
-            chart.visible_candle_count,
+            "CANDLES: Rendered {} | Cache: {:.1}% hit ({}/{}) | Pools: W:{}/{} B:{}/{}",
+            visible_count,
             stats.hit_rate() * 100.0,
             stats.hits,
             stats.hits + stats.misses,
@@ -938,9 +835,6 @@ pub fn render_candlesticks(
         if hidden_count > 0 {
             log_msg.push_str(&format!(" | Hidden: {}", hidden_count));
         }
-        if level != AggregationLevel::None {
-            log_msg.push_str(&format!(" | Aligned: [{}..{}]", aligned_start, aligned_start + candles_to_render.len() * level.ratio()));
-        }
 
         println!("{}", log_msg);
 
@@ -954,30 +848,15 @@ pub fn render_candlesticks(
             entity_reused + pool_get_success + pool_get_failed_query + pool_exhausted
         );
 
-        // Gap detection: check for missing indices in rendered sequence
-        if !rendered_indices.is_empty() {
-            rendered_indices.sort_unstable();
-            let mut gaps = Vec::new();
-            let expected_step = if level != AggregationLevel::None {
-                level.ratio()
-            } else {
-                1
-            };
-
-            for window in rendered_indices.windows(2) {
-                let expected_next = window[0] + expected_step;
-                if window[1] != expected_next {
-                    gaps.push(format!("[{}..{}]", expected_next, window[1]));
-                }
-            }
-
-            if !gaps.is_empty() {
-                println!("  ⚠️  INDEX GAPS DETECTED: {}", gaps.join(", "));
-                println!("      Rendered indices: {:?}", &rendered_indices[0..rendered_indices.len().min(10)]);
-                if rendered_indices.len() > 10 {
-                    println!("      ... and {} more", rendered_indices.len() - 10);
-                }
-            }
+        // Timestamp gap detection
+        if !rendered_timestamps.is_empty() {
+            rendered_timestamps.sort_unstable();
+            println!(
+                "  Time range: {} - {} ({} candles)",
+                rendered_timestamps.first().unwrap_or(&0),
+                rendered_timestamps.last().unwrap_or(&0),
+                rendered_timestamps.len()
+            );
         }
     }
 }
@@ -1000,47 +879,46 @@ pub fn render_volume_bars(
     )>,
     mut pooled_query: Query<&mut PooledEntity>,
 ) {
-    if !chart.needs_redraw {
+    if !chart.needs_redraw || chart.load_status != ChartLoadStatus::Ready {
         return;
     }
 
-    // Skip rendering if data is being loaded or pending application
-    if chart.load_status != ChartLoadStatus::Ready {
-        return;
-    }
-
-    // Find the Volume pane
     let volume_pane = chart.panes.iter().find(|p| matches!(p.id, PaneId::Volume));
-
-    if volume_pane.is_none() {
+    let price_pane = chart.panes.iter().find(|p| matches!(p.id, PaneId::Price));
+    if volume_pane.is_none() || price_pane.is_none() {
         return;
     }
     let volume_pane = volume_pane.unwrap();
-
-    // Find the Price pane to get candle width
-    let price_pane = chart.panes.iter().find(|p| matches!(p.id, PaneId::Price));
-
-    if price_pane.is_none() {
-        return;
-    }
     let price_pane = price_pane.unwrap();
 
-    // Collect candles as a Vec for slice-based operations (BTreeMap doesn't support slicing)
-    let candles_vec: Vec<Candle> = chart.candles.values().cloned().collect();
+    let time_start = chart.visible_time_start;
+    let time_end = chart.visible_time_end;
 
-    // Get shared X-axis state
-    let start = chart.visible_candle_start;
-    let candle_count = candles_vec.len();
-    let end = (start + chart.visible_candle_count).min(candle_count);
+    // Calculate max volume for Y-scaling
+    let max_volume = chart.candles
+        .range(time_start..=time_end)
+        .map(|(_, c)| c.volume as f32)
+        .fold(0.0f32, f32::max) * config.volume_y_axis_padding;
 
-    if start >= end || candle_count == 0 {
+    let visible_count = chart.candles.range(time_start..=time_end).count();
+    let candle_width_px = price_pane.space.viewport.width() / visible_count.max(1) as f32;
+
+    if candle_width_px < config.volume_render_threshold {
+        // Hide all volume bars
+        for (entity, _, _, _, mut visibility) in query.iter_mut() {
+            *visibility = Visibility::Hidden;
+            pools.volume_bars.return_entity(entity, PooledEntityType::VolumeBar);
+            if let Ok(mut pooled) = pooled_query.get_mut(entity) {
+                pooled.in_use = false;
+            }
+        }
         return;
     }
 
     // Determine if aggregation is needed
     let level = if agg_config.enabled {
         agg_state.get_stable_level(
-            chart.visible_candle_count,
+            visible_count,
             agg_config.max_renderable_candles,
         )
     } else {
@@ -1048,12 +926,8 @@ pub fn render_volume_bars(
     };
 
     // Track if we cleared pools this frame
-    // Use level_changed_this_frame flag which was set by render_candlesticks
-    // This ensures volume bars see the SAME level change state as candlesticks
-    let pools_just_cleared = if agg_state.level_changed_this_frame {
-        #[cfg(debug_assertions)]
-        println!("Aggregation level changed for volume bars (via frame flag), clearing pool");
-
+    let pools_just_cleared = agg_state.level_changed_this_frame;
+    if pools_just_cleared {
         // Return all volume bars to pool
         for (entity, _, _, _, mut visibility) in query.iter_mut() {
             *visibility = Visibility::Hidden;
@@ -1062,105 +936,30 @@ pub fn render_volume_bars(
                 pooled.in_use = false;
             }
         }
-
-        true  // Pools were cleared
-    } else {
-        false  // No clearing happened
-    };
-
-    // Get aggregated data if needed (must live for entire function)
-    let aggregated_data;
-    let (candles_to_render, index_mapping_offset, aligned_start) = if level != AggregationLevel::None {
-        aggregated_data = agg_cache.get_or_aggregate(
-            &chart.timeframe,
-            &chart.candles,
-            start,
-            chart.visible_candle_count,
-            level,
-        );
-
-        // Return aggregated candles with offset 0 and aligned start for stable positioning
-        (aggregated_data.candles.as_slice(), 0_usize, aggregated_data.source_range.0)
-    } else {
-        // No aggregation needed
-        (&candles_vec[start..end], start, start)
-    };
-
-    let volume_pane = chart.panes.iter().find(|p| matches!(p.id, PaneId::Volume)).unwrap();
-
-    // Check if candles are too small to render volume bars
-    // Use aggregated candle count for width calculation if aggregation is active
-    let effective_candle_count = if level != AggregationLevel::None {
-        candles_to_render.len().max(1)
-    } else {
-        chart.visible_candle_count.max(1)
-    };
-    let candle_width_px = price_pane.space.viewport.width() / effective_candle_count as f32;
-
-    if candle_width_px < config.volume_render_threshold {
-        // Hide all volume bars and return to pool
-        for (entity, _, _, _, mut visibility) in query.iter_mut() {
-            *visibility = Visibility::Hidden;
-            pools.volume_bars.return_entity(entity, PooledEntityType::VolumeBar);
-            if let Ok(mut pooled) = pooled_query.get_mut(entity) {
-                pooled.in_use = false;
-            }
-        }
-        return;
     }
 
-    // Calculate max volume from aggregated data for proper Y-scaling
-    let max_aggregated_volume = candles_to_render
-        .iter()
-        .map(|c| c.volume as f32)
-        .fold(0.0f32, f32::max) * config.volume_y_axis_padding;
-
-    // Collect existing entities by candle_index
+    // Collect existing entities by candle_timestamp
     use std::collections::{HashMap, HashSet};
-    let mut existing_bars: HashMap<usize, Entity> = HashMap::new();
+    let mut existing_bars: HashMap<i64, Entity> = HashMap::new();
 
-    // Only collect existing entities if aggregation level hasn't changed
-    // If level changed, all entities were just cleared and have stale indices
     if !pools_just_cleared {
         for (entity, bar, _, _, _) in query.iter() {
-            existing_bars.insert(bar.candle_index, entity);
+            existing_bars.insert(bar.candle_timestamp, entity);
         }
     }
 
-    // Track which entities we updated
-    // Use HashSet<Entity> instead of HashSet<usize> to avoid stale index issues during panning
     let mut updated_bars = HashSet::<Entity>::new();
     let mut spawned_count = 0;
 
-    // Process each visible candle
-    for (idx, candle) in candles_to_render.iter().enumerate() {
-        // Map aggregated index to original world space
-        let i = if level != AggregationLevel::None {
-            // Each aggregated candle represents a group of `ratio` source candles.
-            // Position at the CENTER of the group for visual accuracy (see render_candlesticks for details).
-            // Use aligned_start to ensure stable positioning during panning
-            aligned_start + (idx * level.ratio()) + level.center_offset()
-        } else {
-            index_mapping_offset + idx
-        };
+    // DIRECT ITERATION
+    for (timestamp, candle) in chart.candles.range(time_start..=time_end) {
+        let ts = *timestamp;
 
-        // Calculate positions using ChartSpace with custom Y-axis bounds for aggregated volumes
-        // Use max_aggregated_volume as the custom Y range (0.0 to max_aggregated_volume)
         let bar_bottom = volume_pane.space.to_world_with_y_range(
-            i,
-            0.0,
-            chart.visible_candle_start,
-            chart.visible_candle_count,
-            0.0,
-            max_aggregated_volume,
+            ts, 0.0, time_start, time_end, 0.0, max_volume
         );
         let bar_top = volume_pane.space.to_world_with_y_range(
-            i,
-            candle.volume as f32,
-            chart.visible_candle_start,
-            chart.visible_candle_count,
-            0.0,
-            max_aggregated_volume,
+            ts, candle.volume as f32, time_start, time_end, 0.0, max_volume
         );
 
         let bar_center = Vec2::new(
@@ -1186,7 +985,7 @@ pub fn render_volume_bars(
         };
 
         // UPDATE or GET FROM POOL volume bar entity
-        if let Some(&entity) = existing_bars.get(&i) {
+        if let Some(&entity) = existing_bars.get(&ts) {
             // Update existing bar
             if let Ok((_, _, mut transform, mut sprite, mut visibility)) = query.get_mut(entity) {
                 transform.translation = bar_center.extend(0.0);
@@ -1205,7 +1004,7 @@ pub fn render_volume_bars(
             if let Ok((_, mut bar, mut transform, mut sprite, mut visibility)) =
                 query.get_mut(entity)
             {
-                bar.candle_index = i;
+                bar.candle_timestamp = ts;
                 transform.translation = bar_center.extend(0.0);
                 sprite.color = bar_color;
                 if let Some(ref mut size) = sprite.custom_size {
@@ -1229,7 +1028,7 @@ pub fn render_volume_bars(
                             ..default()
                         },
                         Transform::from_translation(bar_center.extend(0.0)),
-                        VolumeBar { candle_index: i },
+                        VolumeBar { candle_timestamp: ts },
                         PooledEntity {
                             entity_type: PooledEntityType::VolumeBar,
                             in_use: true,
@@ -1256,7 +1055,7 @@ pub fn render_volume_bars(
                         ..default()
                     },
                     Transform::from_translation(bar_center.extend(0.0)),
-                    VolumeBar { candle_index: i },
+                    VolumeBar { candle_timestamp: ts },
                     PooledEntity {
                         entity_type: PooledEntityType::VolumeBar,
                         in_use: true,
@@ -1292,10 +1091,8 @@ pub fn render_volume_bars(
     {
         let (vol_total, vol_avail) = pools.volume_bars.stats();
         let mut log_msg = format!(
-            "VOL: Rendered {} bars (indices {}-{}) | Updated: {} | Spawned: {} | Hidden: {} | Pool: {}/{}",
-            end - start,
-            start,
-            end - 1,
+            "VOL: Rendered {} bars | Updated: {} | Spawned: {} | Hidden: {} | Pool: {}/{}",
+            visible_count,
             updated_bars.len(),
             spawned_count,
             hidden_count,
@@ -1305,13 +1102,6 @@ pub fn render_volume_bars(
 
         if pools_just_cleared {
             log_msg.push_str(" | POOLS CLEARED");
-        }
-        if level != AggregationLevel::None {
-            log_msg.push_str(&format!(" | AGG: {:?} ({}:1) | Aligned: [{}..{}]",
-                level,
-                level.ratio(),
-                aligned_start,
-                aligned_start + candles_to_render.len() * level.ratio()));
         }
 
         println!("{}", log_msg);
@@ -1476,8 +1266,8 @@ pub fn render_grid_and_axes(
         return;
     }
 
-    // Collect candles as a Vec for indexed access (BTreeMap doesn't support indexing)
-    let candles_vec: Vec<Candle> = chart.candles.values().cloned().collect();
+    let time_start = chart.visible_time_start;
+    let time_end = chart.visible_time_end;
 
     // Calculate total chart bounds (from top of first pane to bottom of last pane)
     let first_pane = &chart.panes[0];
@@ -1638,15 +1428,8 @@ pub fn render_grid_and_axes(
         let viewport = &pane.space.viewport;
 
         for i in 0..=grid.x_tick_count {
-            let candle_percent = i as f32 / grid.x_tick_count as f32;
-            let candle_index = chart.visible_candle_start
-                + (candle_percent * chart.visible_candle_count as f32) as usize;
-
-            if candle_index >= candles_vec.len() {
-                continue;
-            }
-
-            let x = chart_left + candle_percent * (chart_right - chart_left);
+            let t = i as f32 / grid.x_tick_count as f32;
+            let x = chart_left + t * (chart_right - chart_left);
 
             // Draw vertical line within this pane only
             let line_center = Vec2::new(x, viewport.center().y);
@@ -1666,22 +1449,17 @@ pub fn render_grid_and_axes(
 
     // ========== X-AXIS TIME LABELS (at bottom of last pane) ==========
     if axes.show_x_labels {
+        let time_range = time_end - time_start;
         for i in 0..=grid.x_tick_count {
-            let candle_percent = i as f32 / grid.x_tick_count as f32;
-            let candle_index = chart.visible_candle_start
-                + (candle_percent * chart.visible_candle_count as f32) as usize;
+            let t = i as f32 / grid.x_tick_count as f32;
+            let timestamp = time_start + (t * time_range as f32) as i64;
 
-            if candle_index >= candles_vec.len() {
-                continue;
-            }
-
-            let x = chart_left + candle_percent * (chart_right - chart_left);
-            let candle = &candles_vec[candle_index];
+            let x = chart_left + t * (chart_right - chart_left);
             let label_y = chart_bottom - 40.0;
 
             // Format timestamp using chrono
             let datetime =
-                DateTime::<Utc>::from_timestamp(candle.time / 1000, 0).unwrap_or_default();
+                DateTime::<Utc>::from_timestamp(timestamp / 1000, 0).unwrap_or_default();
             let label_text = datetime.format("%m/%d %H:%M").to_string();
 
             commands.spawn((
@@ -1792,8 +1570,8 @@ pub fn update_crosshair(
     }
 
     // ========== FROM HERE ON: Crosshair is visible, update positions ==========
-    // Collect candles as a Vec for indexed access (BTreeMap doesn't support indexing)
-    let candles_vec: Vec<Candle> = chart.candles.values().cloned().collect();
+    let time_start = chart.visible_time_start;
+    let time_end = chart.visible_time_end;
 
     let first_pane = &chart.panes[0];
     let chart_right = first_pane.space.viewport.max.x;
@@ -1853,8 +1631,8 @@ pub fn update_crosshair(
                     if let Some(entity) = label_entity {
                         let (_, value_at_cursor) = pane.space.from_world(
                             interaction.mouse_pos,
-                            chart.visible_candle_start,
-                            chart.visible_candle_count,
+                            time_start,
+                            time_end,
                         );
 
                         if let Ok(mut text) = texts.get_mut(entity) {
@@ -1891,27 +1669,30 @@ pub fn update_crosshair(
     } // End of mouse_moved check
 
     // ========== FIND CANDLE AT CURSOR ==========
-    let (candle_index, _) = if let Some(pane) = chart.panes.first() {
+    let (timestamp_at_cursor, _) = if let Some(pane) = chart.panes.first() {
         pane.space.from_world(
             interaction.mouse_pos,
-            chart.visible_candle_start,
-            chart.visible_candle_count,
+            time_start,
+            time_end,
         )
     } else {
         return;
     };
 
-    if candle_index >= candles_vec.len() {
-        interaction.last_crosshair_candle_index = None;
+    // Find the candle closest to this timestamp
+    let candle_at_cursor = chart.candles.range(..=timestamp_at_cursor).next_back();
+    if candle_at_cursor.is_none() {
+        interaction.last_crosshair_candle_timestamp = None;
         return;
     }
+    let (candle_ts, _) = candle_at_cursor.unwrap();
 
     // ========== DEBOUNCE: Only update text if candle changed ==========
-    let candle_changed = interaction.last_crosshair_candle_index != Some(candle_index);
+    let candle_changed = interaction.last_crosshair_candle_timestamp != Some(*candle_ts);
 
     if candle_changed {
-        interaction.last_crosshair_candle_index = Some(candle_index);
-        let candle = &candles_vec[candle_index];
+        interaction.last_crosshair_candle_timestamp = Some(*candle_ts);
+        let candle = chart.candles.get(candle_ts).unwrap();
 
         // ========== UPDATE TIME LABEL TEXT (only when candle changes) ==========
         if crosshair.show_time_label {
@@ -1947,26 +1728,31 @@ pub fn update_crosshair(
 }
 
 pub fn render_moving_averages(mut gizmos: Gizmos, chart: Res<Chart>) {
-    // Skip rendering if data is being loaded or pending application
     if chart.load_status != ChartLoadStatus::Ready {
         return;
     }
 
-    // Find the Price pane (indicators overlay on price)
     let price_pane = chart.panes.iter().find(|p| matches!(p.id, PaneId::Price));
-
     if price_pane.is_none() {
         return;
     }
     let price_pane = price_pane.unwrap();
 
-    // Get shared X-axis state
-    let start = chart.visible_candle_start;
-    let end = (start + chart.visible_candle_count).min(chart.candles.len());
+    let time_start = chart.visible_time_start;
+    let time_end = chart.visible_time_end;
 
-    if start >= end {
+    // Collect visible candles as vec for MA value lookup by index
+    let visible_candles: Vec<_> = chart.candles.range(time_start..=time_end).collect();
+    if visible_candles.len() < 2 {
         return;
     }
+
+    // Build a map from timestamp to global index for MA value lookup
+    let timestamp_to_idx: std::collections::HashMap<i64, usize> = chart.candles
+        .keys()
+        .enumerate()
+        .map(|(idx, &ts)| (ts, idx))
+        .collect();
 
     // Render each Moving Average using Gizmos for smooth continuous lines
     for ma in &chart.indicators {
@@ -1975,28 +1761,22 @@ pub fn render_moving_averages(mut gizmos: Gizmos, chart: Res<Chart>) {
         }
 
         // Draw continuous line connecting MA points
-        for i in start..(end - 1) {
-            // Need both current and next values to draw a line segment
-            if let (Some(curr_value), Some(next_value)) =
-                (ma.values[i], ma.values.get(i + 1).and_then(|v| *v))
-            {
-                // Convert to world coordinates
-                let curr_pos = price_pane.space.to_world(
-                    i,
-                    curr_value,
-                    chart.visible_candle_start,
-                    chart.visible_candle_count,
-                );
+        for window in visible_candles.windows(2) {
+            let (curr_ts, _) = window[0];
+            let (next_ts, _) = window[1];
 
-                let next_pos = price_pane.space.to_world(
-                    i + 1,
-                    next_value,
-                    chart.visible_candle_start,
-                    chart.visible_candle_count,
-                );
+            // Look up global index for MA value access
+            let curr_idx = timestamp_to_idx.get(curr_ts).copied();
+            let next_idx = timestamp_to_idx.get(next_ts).copied();
 
-                // Draw line segment with Gizmos (no gaps or artifacts!)
-                gizmos.line_2d(curr_pos, next_pos, ma.color);
+            if let (Some(ci), Some(ni)) = (curr_idx, next_idx) {
+                if let (Some(Some(curr_value)), Some(Some(next_value))) =
+                    (ma.values.get(ci), ma.values.get(ni))
+                {
+                    let curr_pos = price_pane.space.to_world(*curr_ts, *curr_value, time_start, time_end);
+                    let next_pos = price_pane.space.to_world(*next_ts, *next_value, time_start, time_end);
+                    gizmos.line_2d(curr_pos, next_pos, ma.color);
+                }
             }
         }
     }

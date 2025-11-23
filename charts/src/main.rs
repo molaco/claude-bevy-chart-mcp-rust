@@ -142,10 +142,10 @@ fn update_chart_context(chart: Res<Chart>, mut chat_state: ResMut<ChatState>) {
     // or if chart has changed significantly
     if chat_state.is_changed() || chart.is_changed() {
         let context = format!(
-            "Chart: {} candles visible (indices {}-{}), price range: ${:.2}-${:.2}, {} indicators active, volume pane: {}",
-            chart.visible_candle_count,
-            chart.visible_candle_start,
-            chart.visible_candle_start + chart.visible_candle_count,
+            "Chart: {} candles visible (time {}-{}), price range: ${:.2}-${:.2}, {} indicators active, volume pane: {}",
+            chart.visible_candle_count(),
+            chart.visible_time_start,
+            chart.visible_time_end,
             chart.panes.get(0).map_or(0.0, |p| p.space.visible_price_min),
             chart.panes.get(0).map_or(0.0, |p| p.space.visible_price_max),
             chart.indicators.iter().filter(|i| i.visible).count(),
@@ -507,7 +507,7 @@ fn warmup_aggregation_cache(
 
     let timeframe = &chart.timeframe;
     let candles = &chart.candles;
-    let visible_count = chart.visible_candle_count;
+    let visible_count = chart.visible_candle_count();
 
     // Warm up common levels
     let levels = [
@@ -599,9 +599,42 @@ fn setup(
         Vec2::new(chart_width * 0.95, chart_height), // Leave 5% horizontal margin for labels
     );
 
-    let visible_candle_count = 50.min(loaded_candles.len());
-    let spacing = right_spacing_candles(visible_candle_count);
-    let visible_candle_start = (loaded_candles.len() + spacing).saturating_sub(visible_candle_count);
+    // Phase 3: Calculate time-based visible range
+    // Calculate timeframe interval in milliseconds
+    let interval_ms: i64 = match args.timeframe.as_str() {
+        "1m" => 60 * 1000,
+        "3m" => 3 * 60 * 1000,
+        "5m" => 5 * 60 * 1000,
+        "15m" => 15 * 60 * 1000,
+        "30m" => 30 * 60 * 1000,
+        "1h" => 60 * 60 * 1000,
+        "2h" => 2 * 60 * 60 * 1000,
+        "4h" => 4 * 60 * 60 * 1000,
+        "6h" => 6 * 60 * 60 * 1000,
+        "8h" => 8 * 60 * 60 * 1000,
+        "12h" => 12 * 60 * 60 * 1000,
+        "1d" => 24 * 60 * 60 * 1000,
+        "3d" => 3 * 24 * 60 * 60 * 1000,
+        "1w" => 7 * 24 * 60 * 60 * 1000,
+        "1M" => 30 * 24 * 60 * 60 * 1000,
+        _ => 60 * 60 * 1000, // Default 1h
+    };
+
+    // Convert to BTreeMap for bounds fitting functions (do this early)
+    let candles_btree: std::collections::BTreeMap<i64, Candle> = loaded_candles.iter().map(|c| (c.time, c.clone())).collect();
+
+    // Calculate time-based visible range (show last 50 candles by default)
+    let target_candle_count = 50.min(loaded_candles.len());
+    let visible_duration = interval_ms * target_candle_count as i64;
+
+    // Get time bounds from data
+    let latest_time = candles_btree.keys().next_back().copied().unwrap_or(end_time);
+    let earliest_time = candles_btree.keys().next().copied().unwrap_or(start_time);
+
+    // Set visible range to show most recent data with some right spacing
+    let right_spacing = right_spacing_duration(visible_duration);
+    let visible_time_end = latest_time + right_spacing;
+    let visible_time_start = (visible_time_end - visible_duration).max(earliest_time);
 
     // Initialize multi-pane layout: 70% Price + 30% Volume
     let mut panes = vec![
@@ -610,19 +643,19 @@ fn setup(
             PaneType::Price,
             0.7,             // 70% of chart height
             Rect::default(), // Will be calculated by calculate_pane_layouts
-            visible_candle_count,
+            target_candle_count,
         ),
         Pane::new(
             PaneId::Volume,
             PaneType::Volume,
             0.3,             // 30% of chart height
             Rect::default(), // Will be calculated by calculate_pane_layouts
-            visible_candle_count,
+            target_candle_count,
         ),
     ];
 
     // Calculate pane layouts
-    calculate_pane_layouts(&mut panes, total_area, visible_candle_count);
+    calculate_pane_layouts(&mut panes, total_area, target_candle_count);
 
     // Calculate Moving Average indicators (before fitting bounds so we can include them)
     let indicators = vec![
@@ -631,38 +664,36 @@ fn setup(
         MovingAverage::new_sma(&candles_slice, 200, Color::srgb(1.0, 0.0, 1.0)), // Magenta SMA-200
     ];
 
-    // Convert to BTreeMap for bounds fitting functions
-    let candles_btree: std::collections::BTreeMap<i64, Candle> = loaded_candles.iter().map(|c| (c.time, c.clone())).collect();
-
     // Fit Y-axis bounds for each pane (including indicators for Price pane)
+    // Phase 3: Use time-based bounds
     for pane in panes.iter_mut() {
         match pane.pane_type {
             PaneType::Price => {
                 pane.space.fit_price_bounds_with_indicators(
                     &candles_btree,
                     &indicators,
-                    visible_candle_start,
-                    visible_candle_count,
+                    visible_time_start,
+                    visible_time_end,
                 );
             }
             PaneType::Volume => {
                 pane.space
-                    .fit_volume_bounds(&candles_btree, visible_candle_start, visible_candle_count, CandlestickLODConfig::default().volume_y_axis_padding);
+                    .fit_volume_bounds(&candles_btree, visible_time_start, visible_time_end, CandlestickLODConfig::default().volume_y_axis_padding);
             }
             _ => {}
         }
     }
 
     // Create deprecated space for backward compatibility (not used in multi-pane)
-    let space = ChartSpace::new(total_area, visible_candle_count);
+    let space = ChartSpace::new(total_area, target_candle_count);
 
     let chart = Chart {
         ticker_id,
         timeframe: args.timeframe.clone(),
         candles: loaded_candles.into_iter().map(|c| (c.time, c)).collect(),
         candle_offset: 0,
-        visible_candle_start,
-        visible_candle_count,
+        visible_time_start,
+        visible_time_end,
         panes,
         total_area,
         space, // Deprecated
@@ -741,7 +772,7 @@ fn init_entity_pools(mut commands: Commands, config: Res<EntityPoolConfig>) {
                 Transform::from_translation(Vec3::new(-10000.0, -10000.0, 0.0)), // Off-screen
                 Visibility::Hidden,
                 CandlestickWick {
-                    candle_index: usize::MAX,
+                    candle_timestamp: i64::MIN,
                 },
                 PooledEntity {
                     entity_type: PooledEntityType::CandlestickWick,
@@ -764,7 +795,7 @@ fn init_entity_pools(mut commands: Commands, config: Res<EntityPoolConfig>) {
                 Transform::from_translation(Vec3::new(-10000.0, -10000.0, 1.0)),
                 Visibility::Hidden,
                 CandlestickBody {
-                    candle_index: usize::MAX,
+                    candle_timestamp: i64::MIN,
                 },
                 PooledEntity {
                     entity_type: PooledEntityType::CandlestickBody,
@@ -787,7 +818,7 @@ fn init_entity_pools(mut commands: Commands, config: Res<EntityPoolConfig>) {
                 Transform::from_translation(Vec3::new(-10000.0, -10000.0, 0.0)),
                 Visibility::Hidden,
                 CandlestickOHLCLine {
-                    candle_index: usize::MAX,
+                    candle_timestamp: i64::MIN,
                 },
                 PooledEntity {
                     entity_type: PooledEntityType::CandlestickOHLC,
@@ -810,7 +841,7 @@ fn init_entity_pools(mut commands: Commands, config: Res<EntityPoolConfig>) {
                 Transform::from_translation(Vec3::new(-10000.0, -10000.0, 0.0)),
                 Visibility::Hidden,
                 CandlestickRangeLine {
-                    candle_index: usize::MAX,
+                    candle_timestamp: i64::MIN,
                 },
                 PooledEntity {
                     entity_type: PooledEntityType::CandlestickRange,
@@ -833,7 +864,7 @@ fn init_entity_pools(mut commands: Commands, config: Res<EntityPoolConfig>) {
                 Transform::from_translation(Vec3::new(-10000.0, -10000.0, 0.0)),
                 Visibility::Hidden,
                 VolumeBar {
-                    candle_index: usize::MAX,
+                    candle_timestamp: i64::MIN,
                 },
                 PooledEntity {
                     entity_type: PooledEntityType::VolumeBar,
@@ -1042,7 +1073,7 @@ fn update_timeframe_label(
             text.0 = format!(
                 "Timeframe: {}\nCandles: {}",
                 timeframe_mgr.current_timeframe,
-                chart.visible_candle_count
+                chart.visible_candle_count()
             );
         }
     }
@@ -1142,9 +1173,19 @@ fn handle_timeframe_change(
                 chart.timeframe = event.to.clone();
                 timeframe_mgr.current_timeframe = event.to.clone();
 
-                // Reset visible range to show all candles
-                chart.visible_candle_start = 0;
-                chart.visible_candle_count = candles_slice.len().min(200); // Show up to 200 candles
+                // Phase 3: Reset visible range using time-based approach
+                let interval_ms = chart.timeframe_interval_ms();
+                let target_count = candles_slice.len().min(200); // Show up to 200 candles
+                let visible_duration = interval_ms * target_count as i64;
+
+                // Get time bounds from data
+                let earliest = chart.candles.keys().next().copied().unwrap_or(0);
+                let latest = chart.candles.keys().next_back().copied().unwrap_or(0);
+
+                // Set visible range to show most recent data with some right spacing
+                let right_spacing = right_spacing_duration(visible_duration);
+                chart.visible_time_end = latest + right_spacing;
+                chart.visible_time_start = (chart.visible_time_end - visible_duration).max(earliest);
 
                 // Recalculate indicators with new data
                 let new_indicators = vec![
@@ -1154,8 +1195,8 @@ fn handle_timeframe_change(
                 ];
 
                 // Update pane bounds
-                let visible_start = chart.visible_candle_start;
-                let visible_count = chart.visible_candle_count;
+                let visible_time_start = chart.visible_time_start;
+                let visible_time_end = chart.visible_time_end;
                 let volume_padding = config.volume_y_axis_padding;
 
                 chart.indicators = new_indicators;
@@ -1171,24 +1212,25 @@ fn handle_timeframe_change(
                                 pane.space.fit_price_bounds_with_indicators(
                                     candles,
                                     indicators,
-                                    visible_start,
-                                    visible_count,
+                                    visible_time_start,
+                                    visible_time_end,
                                 );
                             }
                             PaneType::Volume => {
                                 pane.space.fit_volume_bounds(
                                     candles,
-                                    visible_start,
-                                    visible_count,
+                                    visible_time_start,
+                                    visible_time_end,
                                     volume_padding,
                                 );
                             }
                             _ => {}
                         }
+                        let visible_candle_count = candles.range(visible_time_start..=visible_time_end).count();
                         pane.space.recalculate_cache(
-                            visible_count,
+                            visible_candle_count,
                             crate::aggregation::AggregationLevel::None,
-                            visible_count
+                            visible_candle_count
                         );
                     }
                 }
