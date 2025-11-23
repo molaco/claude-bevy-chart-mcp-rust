@@ -273,7 +273,7 @@ pub fn handle_mouse_input(
 
 /// Check if lazy loading is needed and queue data for next-frame application
 /// Uses deferred updates pattern to prevent 1-frame rendering glitches
-/// Phase 3: Time-based lazy loading
+/// Phase 6: Time-based lazy loading with buffer duration
 pub fn check_lazy_load(
     mut chart: ResMut<Chart>,
     mut deferred: ResMut<DeferredUpdates>,
@@ -285,73 +285,85 @@ pub fn check_lazy_load(
     }
 
     let interval_ms = chart.timeframe_interval_ms();
-    let buffer_time = interval_ms * 20; // 20 candles worth of buffer
+    let buffer_duration = interval_ms * 20; // 20 candles worth of buffer
 
-    // Load more historical data when scrolling left (close to earliest data)
-    if let Some((&earliest_time, _)) = chart.candles.first_key_value() {
-        if chart.visible_time_start < earliest_time + buffer_time {
-            chart.load_status = ChartLoadStatus::Loading;
+    // Get data boundaries
+    let earliest_data = chart.candles.keys().next().copied();
+    let latest_data = chart.candles.keys().next_back().copied();
 
-            let load_count = 100;
-            let load_end_time = earliest_time;
-            let load_start_time = load_end_time - (load_count as i64 * interval_ms);
+    if earliest_data.is_none() || latest_data.is_none() {
+        return;
+    }
+    let earliest_data = earliest_data.unwrap();
+    let latest_data = latest_data.unwrap();
 
-            if let Ok(new_candles) = db.load_candles(
-                chart.ticker_id,
-                &chart.timeframe,
-                load_start_time,
-                load_end_time - 1, // Exclude the first candle we already have
-            ) {
-                if !new_candles.is_empty() {
-                    println!("Lazy loaded {} historical candles (deferred)", new_candles.len());
+    // Load historical data when approaching left edge
+    if chart.visible_time_start < earliest_data + buffer_duration {
+        chart.load_status = ChartLoadStatus::Loading;
 
-                    // Queue for next-frame application instead of immediate update
-                    deferred.candles_to_prepend = Some(new_candles);
-                    deferred.invalidate_aggregation = true;
-                    chart.load_status = ChartLoadStatus::PendingApply;
-                } else {
-                    chart.load_status = ChartLoadStatus::Ready;
-                }
+        let load_count = 100;
+        let load_end_time = earliest_data;
+        let load_start_time = load_end_time - (load_count as i64 * interval_ms);
+
+        if let Ok(new_candles) = db.load_candles(
+            chart.ticker_id,
+            &chart.timeframe,
+            load_start_time,
+            load_end_time - 1, // Exclude the first candle we already have
+        ) {
+            if !new_candles.is_empty() {
+                println!("Lazy loaded {} historical candles", new_candles.len());
+
+                // Queue for next-frame application instead of immediate update
+                deferred.candles_to_prepend = Some(new_candles);
+                deferred.invalidate_aggregation = true;
+                chart.load_status = ChartLoadStatus::PendingApply;
             } else {
                 chart.load_status = ChartLoadStatus::Ready;
             }
-            return; // Don't check append in the same frame
+        } else {
+            chart.load_status = ChartLoadStatus::Ready;
         }
+        return; // Don't check append in the same frame
     }
 
-    // Load more recent data when scrolling right (close to latest data)
-    if let Some((&latest_time, _)) = chart.candles.last_key_value() {
-        if chart.visible_time_end > latest_time - buffer_time {
-            chart.load_status = ChartLoadStatus::Loading;
+    // Load recent data when approaching right edge
+    if chart.visible_time_end > latest_data - buffer_duration {
+        chart.load_status = ChartLoadStatus::Loading;
 
-            let load_start_time = latest_time;
-            let load_end_time = load_start_time + (100 * interval_ms);
+        let load_start_time = latest_data;
+        let load_end_time = load_start_time + (100 * interval_ms);
 
-            if let Ok(new_candles) = db.load_candles(
-                chart.ticker_id,
-                &chart.timeframe,
-                load_start_time + 1, // Exclude the last candle we already have
-                load_end_time,
-            ) {
-                if !new_candles.is_empty() {
-                    println!("Lazy loaded {} recent candles (deferred)", new_candles.len());
+        if let Ok(new_candles) = db.load_candles(
+            chart.ticker_id,
+            &chart.timeframe,
+            load_start_time + 1, // Exclude the last candle we already have
+            load_end_time,
+        ) {
+            if !new_candles.is_empty() {
+                println!("Lazy loaded {} recent candles", new_candles.len());
 
-                    // Queue for next-frame application instead of immediate update
-                    deferred.candles_to_append = Some(new_candles);
-                    deferred.invalidate_aggregation = true;
-                    chart.load_status = ChartLoadStatus::PendingApply;
-                } else {
-                    chart.load_status = ChartLoadStatus::Ready;
-                }
+                // Queue for next-frame application instead of immediate update
+                deferred.candles_to_append = Some(new_candles);
+                deferred.invalidate_aggregation = true;
+                chart.load_status = ChartLoadStatus::PendingApply;
             } else {
                 chart.load_status = ChartLoadStatus::Ready;
             }
+        } else {
+            chart.load_status = ChartLoadStatus::Ready;
         }
     }
 }
 
 /// Apply deferred updates at the start of the frame
 /// This ensures all data changes happen before rendering systems run
+///
+/// Phase 6 Key Insight: With time-based visible range, prepending/appending candles
+/// requires NO adjustment to visible_time_start/visible_time_end!
+/// - Old (index-based): After prepending 100 candles, must adjust visible_candle_start += 100
+/// - New (time-based): visible_time_start and visible_time_end stay the same
+///   The view shows the same time range, now with more data available
 pub fn apply_deferred_updates(
     mut chart: ResMut<Chart>,
     mut deferred: ResMut<DeferredUpdates>,
@@ -364,20 +376,18 @@ pub fn apply_deferred_updates(
 
     // Apply prepended candles (historical data)
     if let Some(new_candles) = deferred.candles_to_prepend.take() {
-        let new_len = new_candles.len();
-        println!("Applying {} prepended candles", new_len);
+        println!("Applying {} prepended candles", new_candles.len());
 
-        // Insert new candles into BTreeMap (automatically sorted by key)
+        // Insert into BTreeMap (auto-sorted by timestamp)
         for candle in new_candles {
             chart.candles.insert(candle.time, candle);
         }
 
-        // Phase 3: No need to adjust visible_time_start/end when prepending
-        // The time window stays the same, just more historical data is available
+        // NO adjustment needed for visible_time_start/end!
+        // Time-based view automatically shows the same time range
+        // The view stays at the same timestamps, just with more data available
 
-        // INCREMENTAL: Only calculate MA for NEW candles
-        // Use index-based iteration to avoid borrow issues
-        // Convert BTreeMap values to Vec for MA calculation
+        // Recalculate indicators with full dataset
         let candles_vec: Vec<Candle> = chart.candles.values().cloned().collect();
         for i in 0..chart.indicators.len() {
             let indicator = &chart.indicators[i];
@@ -395,17 +405,16 @@ pub fn apply_deferred_updates(
 
     // Apply appended candles (recent data)
     if let Some(new_candles) = deferred.candles_to_append.take() {
-        let _old_len = chart.candles.len();
         println!("Applying {} appended candles", new_candles.len());
 
-        // Insert new candles into BTreeMap (automatically sorted by key)
+        // Insert into BTreeMap (auto-sorted by timestamp)
         for candle in new_candles {
             chart.candles.insert(candle.time, candle);
         }
 
-        // INCREMENTAL: Calculate new MA values
-        // Collect calculation results first to avoid borrow conflicts
-        // Convert BTreeMap values to Vec for MA calculation
+        // NO adjustment needed - time range stays the same
+
+        // Recalculate indicators with full dataset
         let candles_vec: Vec<Candle> = chart.candles.values().cloned().collect();
         let indicator_updates: Vec<(usize, Vec<Option<f32>>)> = chart
             .indicators

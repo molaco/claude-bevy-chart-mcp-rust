@@ -19,6 +19,29 @@ pub struct Candle {
     pub volume: f64,
 }
 
+/// Convert timeframe string to interval in milliseconds
+/// Phase 6: Standalone helper for chart initialization
+pub fn timeframe_to_interval_ms(timeframe: &str) -> i64 {
+    match timeframe {
+        "1m" => 60 * 1000,
+        "3m" => 3 * 60 * 1000,
+        "5m" => 5 * 60 * 1000,
+        "15m" => 15 * 60 * 1000,
+        "30m" => 30 * 60 * 1000,
+        "1h" => 60 * 60 * 1000,
+        "2h" => 2 * 60 * 60 * 1000,
+        "4h" => 4 * 60 * 60 * 1000,
+        "6h" => 6 * 60 * 60 * 1000,
+        "8h" => 8 * 60 * 60 * 1000,
+        "12h" => 12 * 60 * 60 * 1000,
+        "1d" => 24 * 60 * 60 * 1000,
+        "3d" => 3 * 24 * 60 * 60 * 1000,
+        "1w" => 7 * 24 * 60 * 60 * 1000,
+        "1M" => 30 * 24 * 60 * 60 * 1000, // Approximate
+        _ => 60 * 60 * 1000, // Default 1h
+    }
+}
+
 /// Coordinate space for chart rendering
 #[derive(Debug, Clone)]
 pub struct ChartSpace {
@@ -1307,8 +1330,14 @@ impl EntityPoolConfig {
 }
 
 /// Configuration for zoom limits per timeframe
+/// Phase 6: Updated to use duration-based methods
 #[derive(Resource, Clone)]
 pub struct ZoomLimitConfig {
+    /// Minimum visible duration (most zoomed in) - in candles
+    pub min_duration_candles: usize,
+    /// Maximum visible duration per timeframe (most zoomed out) - in candles
+    pub max_duration_candles: std::collections::HashMap<String, usize>,
+    /// Legacy field for backward compatibility
     pub timeframe_limits: std::collections::HashMap<String, usize>,
     pub global_min: usize,
 }
@@ -1317,7 +1346,7 @@ impl Default for ZoomLimitConfig {
     fn default() -> Self {
         let mut limits = std::collections::HashMap::new();
 
-        // All timeframes start with 1000 max candles
+        // All timeframes start with 1000 max candles (most zoomed out)
         // Modifiable per-timeframe later if needed
         limits.insert("1m".to_string(), 1000);
         limits.insert("5m".to_string(), 1000);
@@ -1327,6 +1356,8 @@ impl Default for ZoomLimitConfig {
         limits.insert("1d".to_string(), 1000);
 
         Self {
+            min_duration_candles: 10, // Minimum 10 candles visible (most zoomed in)
+            max_duration_candles: limits.clone(),
             timeframe_limits: limits,
             global_min: 10,
         }
@@ -1334,7 +1365,21 @@ impl Default for ZoomLimitConfig {
 }
 
 impl ZoomLimitConfig {
-    /// Get maximum candle count for a specific timeframe
+    /// Get minimum visible duration in milliseconds (most zoomed in)
+    pub fn min_duration(&self, interval_ms: i64) -> i64 {
+        self.min_duration_candles as i64 * interval_ms
+    }
+
+    /// Get maximum visible duration in milliseconds for a timeframe (most zoomed out)
+    pub fn max_duration(&self, timeframe: &str, interval_ms: i64) -> i64 {
+        let candles = self.max_duration_candles
+            .get(timeframe)
+            .copied()
+            .unwrap_or(10000);
+        candles as i64 * interval_ms
+    }
+
+    /// Get maximum candle count for a specific timeframe (legacy method)
     pub fn max_for_timeframe(&self, timeframe: &str) -> usize {
         self.timeframe_limits
             .get(timeframe)
