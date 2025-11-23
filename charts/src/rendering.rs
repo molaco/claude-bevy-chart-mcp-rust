@@ -24,6 +24,36 @@ fn format_volume(value: f32) -> String {
     }
 }
 
+/// Find the candle nearest to a given timestamp
+fn find_nearest_candle(
+    candles: &std::collections::BTreeMap<i64, Candle>,
+    target_time: i64,
+) -> Option<(&i64, &Candle)> {
+    if candles.is_empty() {
+        return None;
+    }
+
+    // Get candle at or before target
+    let before = candles.range(..=target_time).next_back();
+
+    // Get candle after target
+    let after = candles.range(target_time..).next();
+
+    match (before, after) {
+        (Some((t1, c1)), Some((t2, c2))) => {
+            // Return the closer one
+            if (target_time - t1).abs() <= (t2 - target_time).abs() {
+                Some((t1, c1))
+            } else {
+                Some((t2, c2))
+            }
+        }
+        (Some(entry), None) => Some(entry),
+        (None, Some(entry)) => Some(entry),
+        (None, None) => None,
+    }
+}
+
 // ============================================================================
 // RENDERING SYSTEMS
 // ============================================================================
@@ -1588,13 +1618,8 @@ pub fn update_crosshair(
         // Selective cache invalidation: only clear crosshair, preserve main chart cache
         render_cache.clear_crosshair();
 
-        // ========== UPDATE VERTICAL CROSSHAIR LINE POSITIONS ==========
-        for segment in &crosshair_entities.vertical_line_segments {
-            if let Ok(mut transform) = transforms.get_mut(*segment) {
-                transform.translation.x = mouse_x;
-            }
-            // ✅ Visibility already set by state change handler above
-        }
+        // NOTE: Vertical line X position is now updated below (snapped to candle center)
+        // after find_nearest_candle() is called
 
         // ========== UPDATE PER-PANE HORIZONTAL LINES & LABELS ==========
         for pane in &chart.panes {
@@ -1668,8 +1693,9 @@ pub fn update_crosshair(
         }
     } // End of mouse_moved check
 
-    // ========== FIND CANDLE AT CURSOR ==========
-    let (timestamp_at_cursor, _) = if let Some(pane) = chart.panes.first() {
+    // ========== FIND NEAREST CANDLE AT CURSOR (Phase 4: Time-based) ==========
+    // Convert mouse X to timestamp
+    let (cursor_time, _) = if let Some(pane) = chart.panes.first() {
         pane.space.from_world(
             interaction.mouse_pos,
             time_start,
@@ -1679,26 +1705,38 @@ pub fn update_crosshair(
         return;
     };
 
-    // Find the candle closest to this timestamp
-    let candle_at_cursor = chart.candles.range(..=timestamp_at_cursor).next_back();
-    if candle_at_cursor.is_none() {
+    // Find nearest candle by timestamp (O(log n) BTreeMap lookup)
+    let candle = find_nearest_candle(&chart.candles, cursor_time);
+    if candle.is_none() {
         interaction.last_crosshair_candle_timestamp = None;
         return;
     }
-    let (candle_ts, _) = candle_at_cursor.unwrap();
+    let (candle_time, candle) = candle.unwrap();
+
+    // ========== SNAP CROSSHAIR X TO CANDLE CENTER ==========
+    let snapped_x = chart.panes[0]
+        .space
+        .to_world(*candle_time, candle.close as f32, time_start, time_end)
+        .x;
+
+    // Update vertical line position (snapped to candle center)
+    for segment in &crosshair_entities.vertical_line_segments {
+        if let Ok(mut transform) = transforms.get_mut(*segment) {
+            transform.translation.x = snapped_x;
+        }
+    }
 
     // ========== DEBOUNCE: Only update text if candle changed ==========
-    let candle_changed = interaction.last_crosshair_candle_timestamp != Some(*candle_ts);
+    let candle_changed = interaction.last_crosshair_candle_timestamp != Some(*candle_time);
 
     if candle_changed {
-        interaction.last_crosshair_candle_timestamp = Some(*candle_ts);
-        let candle = chart.candles.get(candle_ts).unwrap();
+        interaction.last_crosshair_candle_timestamp = Some(*candle_time);
 
         // ========== UPDATE TIME LABEL TEXT (only when candle changes) ==========
         if crosshair.show_time_label {
             let datetime =
-                DateTime::<Utc>::from_timestamp(candle.time / 1000, 0).unwrap_or_default();
-            let label_text = datetime.format("%m/%d %H:%M").to_string();
+                DateTime::<Utc>::from_timestamp(*candle_time / 1000, 0).unwrap_or_default();
+            let label_text = datetime.format("%Y-%m-%d %H:%M").to_string();
 
             if let Ok(mut text) = texts.get_mut(crosshair_entities.time_label) {
                 text.0 = label_text;
@@ -1718,10 +1756,10 @@ pub fn update_crosshair(
         }
     }
 
-    // ========== UPDATE TIME LABEL POSITION (when mouse moves) ==========
-    if mouse_moved && crosshair.show_time_label {
+    // ========== UPDATE TIME LABEL POSITION (snapped to candle center) ==========
+    if crosshair.show_time_label {
         if let Ok(mut transform) = transforms.get_mut(crosshair_entities.time_label) {
-            transform.translation.x = mouse_x;
+            transform.translation.x = snapped_x;
         }
         // ✅ Visibility already set by state change handler above
     }
