@@ -507,7 +507,8 @@ fn warmup_aggregation_cache(
 
     let timeframe = &chart.timeframe;
     let candles = &chart.candles;
-    let visible_count = chart.visible_candle_count();
+    let time_start = chart.visible_time_start;
+    let time_end = chart.visible_time_end;
 
     // Warm up common levels
     let levels = [
@@ -521,8 +522,8 @@ fn warmup_aggregation_cache(
         cache.get_or_aggregate(
             timeframe,
             candles,
-            0,
-            visible_count,
+            time_start,
+            time_end,
             level,
         );
     }

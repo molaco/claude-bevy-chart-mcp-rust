@@ -1,6 +1,6 @@
 use crate::types::Candle;
 use super::types::{AggregationLevel, AggregatedCandles};
-use super::engine::aggregate_range;
+use super::engine::aggregate_time_range;
 use std::collections::{BTreeMap, HashMap};
 use std::time::Instant;
 use bevy::prelude::*;
@@ -10,17 +10,17 @@ use bevy::prelude::*;
 pub struct CacheKey {
     pub timeframe: String,
     pub level: AggregationLevel,
-    pub start: usize,
-    pub count: usize,
+    pub time_start: i64,  // Was: start (usize)
+    pub time_end: i64,    // Was: count (usize)
 }
 
 impl CacheKey {
-    pub fn new(timeframe: String, level: AggregationLevel, start: usize, count: usize) -> Self {
+    pub fn new(timeframe: String, level: AggregationLevel, time_start: i64, time_end: i64) -> Self {
         Self {
             timeframe,
             level,
-            start,
-            count,
+            time_start,
+            time_end,
         }
     }
 }
@@ -88,11 +88,11 @@ impl AggregationCache {
         &mut self,
         timeframe: &str,
         source: &BTreeMap<i64, Candle>,
-        start: usize,
-        count: usize,
+        time_start: i64,
+        time_end: i64,
         level: AggregationLevel,
     ) -> AggregatedCandles {
-        let key = CacheKey::new(timeframe.to_string(), level, start, count);
+        let key = CacheKey::new(timeframe.to_string(), level, time_start, time_end);
 
         // Check cache
         if let Some(cached) = self.cache.get(&key) {
@@ -103,7 +103,7 @@ impl AggregationCache {
 
         // Cache miss - compute aggregation
         self.stats.misses += 1;
-        let aggregated = aggregate_range(source, start, count, level);
+        let aggregated = aggregate_time_range(source, time_start, time_end, level);
 
         // Estimate size of this entry (~56 bytes per candle)
         let entry_size = aggregated.candles.len() * 56;
@@ -214,18 +214,18 @@ mod tests {
         let mut cache = AggregationCache::new(10 * 1024 * 1024); // 10MB
         let candles = create_test_candles(1000);
 
-        // First access - should be a miss
-        let _result1 = cache.get_or_aggregate("5m", &candles, 0, 1000, AggregationLevel::Medium);
+        // First access - should be a miss (timestamps: 0 to 999000 with 1000ms interval)
+        let _result1 = cache.get_or_aggregate("5m", &candles, 0, 999000, AggregationLevel::Medium);
         assert_eq!(cache.stats().hits, 0);
         assert_eq!(cache.stats().misses, 1);
 
         // Second access with same parameters - should be a hit
-        let _result2 = cache.get_or_aggregate("5m", &candles, 0, 1000, AggregationLevel::Medium);
+        let _result2 = cache.get_or_aggregate("5m", &candles, 0, 999000, AggregationLevel::Medium);
         assert_eq!(cache.stats().hits, 1);
         assert_eq!(cache.stats().misses, 1);
 
         // Different level - should be a miss
-        let _result3 = cache.get_or_aggregate("5m", &candles, 0, 1000, AggregationLevel::Low);
+        let _result3 = cache.get_or_aggregate("5m", &candles, 0, 999000, AggregationLevel::Low);
         assert_eq!(cache.stats().hits, 1);
         assert_eq!(cache.stats().misses, 2);
     }
@@ -235,21 +235,21 @@ mod tests {
         let mut cache = AggregationCache::new(500); // Very small cache
         let candles = create_test_candles(100);
 
-        // Fill cache with different levels
-        cache.get_or_aggregate("5m", &candles, 0, 100, AggregationLevel::Low);
+        // Fill cache with different levels (timestamps: 0 to 99000 with 1000ms interval)
+        cache.get_or_aggregate("5m", &candles, 0, 99000, AggregationLevel::Low);
         std::thread::sleep(std::time::Duration::from_millis(10));
 
-        cache.get_or_aggregate("5m", &candles, 0, 100, AggregationLevel::Medium);
+        cache.get_or_aggregate("5m", &candles, 0, 99000, AggregationLevel::Medium);
         std::thread::sleep(std::time::Duration::from_millis(10));
 
-        cache.get_or_aggregate("5m", &candles, 0, 100, AggregationLevel::High);
+        cache.get_or_aggregate("5m", &candles, 0, 99000, AggregationLevel::High);
 
         // Access the first entry again to make it recent
-        cache.get_or_aggregate("5m", &candles, 0, 100, AggregationLevel::Low);
+        cache.get_or_aggregate("5m", &candles, 0, 99000, AggregationLevel::Low);
 
         // Add a new entry - should evict Medium (least recently used)
         std::thread::sleep(std::time::Duration::from_millis(10));
-        cache.get_or_aggregate("5m", &candles, 0, 100, AggregationLevel::VeryHigh);
+        cache.get_or_aggregate("5m", &candles, 0, 99000, AggregationLevel::VeryHigh);
 
         // Verify eviction happened
         assert!(cache.stats().evictions > 0);
@@ -260,10 +260,10 @@ mod tests {
         let mut cache = AggregationCache::new(10 * 1024 * 1024);
         let candles = create_test_candles(1000);
 
-        // Add entries for different timeframes
-        cache.get_or_aggregate("5m", &candles, 0, 1000, AggregationLevel::Medium);
-        cache.get_or_aggregate("1h", &candles, 0, 1000, AggregationLevel::Medium);
-        cache.get_or_aggregate("5m", &candles, 0, 500, AggregationLevel::Low);
+        // Add entries for different timeframes (timestamps: 0 to 999000 with 1000ms interval)
+        cache.get_or_aggregate("5m", &candles, 0, 999000, AggregationLevel::Medium);
+        cache.get_or_aggregate("1h", &candles, 0, 999000, AggregationLevel::Medium);
+        cache.get_or_aggregate("5m", &candles, 0, 499000, AggregationLevel::Low);
 
         assert_eq!(cache.entry_count(), 3);
 
@@ -273,7 +273,7 @@ mod tests {
         assert_eq!(cache.entry_count(), 1); // Only 1h should remain
 
         // Verify 1h is still there
-        let result = cache.get_or_aggregate("1h", &candles, 0, 1000, AggregationLevel::Medium);
+        let _result = cache.get_or_aggregate("1h", &candles, 0, 999000, AggregationLevel::Medium);
         assert!(cache.stats().hits > 0); // Should be a hit
     }
 
@@ -282,9 +282,11 @@ mod tests {
         let mut cache = AggregationCache::new(5000); // 5KB limit
         let candles = create_test_candles(1000);
 
-        // Add multiple entries
+        // Add multiple entries (timestamps: each 100 candles = 100000ms range)
         for i in 0..10 {
-            cache.get_or_aggregate("5m", &candles, i * 100, 100, AggregationLevel::Medium);
+            let time_start = i as i64 * 100000;
+            let time_end = time_start + 99000;
+            cache.get_or_aggregate("5m", &candles, time_start, time_end, AggregationLevel::Medium);
         }
 
         // Cache size should not exceed limit (with some margin for eviction timing)
@@ -296,12 +298,12 @@ mod tests {
         let mut cache = AggregationCache::new(10 * 1024 * 1024);
         let candles = create_test_candles(1000);
 
-        // Generate some hits and misses
-        cache.get_or_aggregate("5m", &candles, 0, 1000, AggregationLevel::Medium);
-        cache.get_or_aggregate("5m", &candles, 0, 1000, AggregationLevel::Medium);
-        cache.get_or_aggregate("5m", &candles, 0, 1000, AggregationLevel::Low);
-        cache.get_or_aggregate("5m", &candles, 0, 1000, AggregationLevel::Low);
-        cache.get_or_aggregate("5m", &candles, 0, 1000, AggregationLevel::High);
+        // Generate some hits and misses (timestamps: 0 to 999000 with 1000ms interval)
+        cache.get_or_aggregate("5m", &candles, 0, 999000, AggregationLevel::Medium);
+        cache.get_or_aggregate("5m", &candles, 0, 999000, AggregationLevel::Medium);
+        cache.get_or_aggregate("5m", &candles, 0, 999000, AggregationLevel::Low);
+        cache.get_or_aggregate("5m", &candles, 0, 999000, AggregationLevel::Low);
+        cache.get_or_aggregate("5m", &candles, 0, 999000, AggregationLevel::High);
 
         let stats = cache.stats();
         assert_eq!(stats.hits, 2); // Low and Medium were hit once each
@@ -318,9 +320,9 @@ mod tests {
         let mut cache = AggregationCache::new(10 * 1024 * 1024);
         let candles = create_test_candles(1000);
 
-        // Add some entries
-        cache.get_or_aggregate("5m", &candles, 0, 1000, AggregationLevel::Medium);
-        cache.get_or_aggregate("1h", &candles, 0, 1000, AggregationLevel::Low);
+        // Add some entries (timestamps: 0 to 999000 with 1000ms interval)
+        cache.get_or_aggregate("5m", &candles, 0, 999000, AggregationLevel::Medium);
+        cache.get_or_aggregate("1h", &candles, 0, 999000, AggregationLevel::Low);
 
         assert_eq!(cache.entry_count(), 2);
         assert!(cache.size_bytes() > 0);
@@ -339,9 +341,9 @@ mod tests {
         let mut cache = AggregationCache::new(10 * 1024 * 1024);
         let candles = create_test_candles(1000);
 
-        // Same level, different ranges
-        cache.get_or_aggregate("5m", &candles, 0, 500, AggregationLevel::Medium);
-        cache.get_or_aggregate("5m", &candles, 500, 500, AggregationLevel::Medium);
+        // Same level, different time ranges (timestamps with 1000ms interval)
+        cache.get_or_aggregate("5m", &candles, 0, 499000, AggregationLevel::Medium);
+        cache.get_or_aggregate("5m", &candles, 500000, 999000, AggregationLevel::Medium);
 
         assert_eq!(cache.entry_count(), 2); // Should cache separately
     }
@@ -351,12 +353,14 @@ mod tests {
         let mut cache = AggregationCache::new(10 * 1024 * 1024);
         let candles = create_test_candles(10);
 
-        let result = cache.get_or_aggregate("5m", &candles, 0, 10, AggregationLevel::Medium);
+        // Test with timestamps (10 candles: 0 to 9000 with 1000ms interval)
+        let result = cache.get_or_aggregate("5m", &candles, 0, 9000, AggregationLevel::Medium);
 
         // Should aggregate 10 candles at 1:5 ratio
         assert_eq!(result.candles.len(), 2); // 10 / 5 = 2
         assert_eq!(result.level, AggregationLevel::Medium);
-        assert_eq!(result.source_range, (0, 10));
+        // time_range is now in timestamps (aligned boundaries may vary)
+        assert_eq!(result.time_range.0, 0); // Start aligned to 0
     }
 
     #[test]
@@ -364,8 +368,9 @@ mod tests {
         let mut cache = AggregationCache::new(10 * 1024 * 1024);
         let candles = create_test_candles(100);
 
-        let result1 = cache.get_or_aggregate("5m", &candles, 0, 100, AggregationLevel::Low);
-        let result2 = cache.get_or_aggregate("5m", &candles, 0, 100, AggregationLevel::Low);
+        // Test with timestamps (100 candles: 0 to 99000 with 1000ms interval)
+        let result1 = cache.get_or_aggregate("5m", &candles, 0, 99000, AggregationLevel::Low);
+        let result2 = cache.get_or_aggregate("5m", &candles, 0, 99000, AggregationLevel::Low);
 
         // Results should be identical
         assert_eq!(result1.candles.len(), result2.candles.len());
@@ -381,17 +386,17 @@ mod tests {
         let mut cache = AggregationCache::new(10 * 1024 * 1024);
         let candles = create_test_candles(1000);
 
-        // 1 miss
-        cache.get_or_aggregate("5m", &candles, 0, 1000, AggregationLevel::Medium);
+        // 1 miss (timestamps: 0 to 999000 with 1000ms interval)
+        cache.get_or_aggregate("5m", &candles, 0, 999000, AggregationLevel::Medium);
         assert_eq!(cache.stats().hit_rate(), 0.0);
 
         // 1 hit
-        cache.get_or_aggregate("5m", &candles, 0, 1000, AggregationLevel::Medium);
+        cache.get_or_aggregate("5m", &candles, 0, 999000, AggregationLevel::Medium);
         assert_eq!(cache.stats().hit_rate(), 0.5); // 1/2
 
         // 2 more hits
-        cache.get_or_aggregate("5m", &candles, 0, 1000, AggregationLevel::Medium);
-        cache.get_or_aggregate("5m", &candles, 0, 1000, AggregationLevel::Medium);
+        cache.get_or_aggregate("5m", &candles, 0, 999000, AggregationLevel::Medium);
+        cache.get_or_aggregate("5m", &candles, 0, 999000, AggregationLevel::Medium);
         assert_eq!(cache.stats().hit_rate(), 0.75); // 3/4
     }
 }

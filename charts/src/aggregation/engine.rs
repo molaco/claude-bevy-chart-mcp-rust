@@ -10,12 +10,16 @@ pub fn aggregate_candles(
     let ratio = level.ratio();
     let candle_vec: Vec<&Candle> = source.values().collect();
 
+    // Get time bounds for the time_range field
+    let time_start = source.keys().next().copied().unwrap_or(0);
+    let time_end = source.keys().next_back().copied().unwrap_or(0);
+
     if ratio == 1 {
         // No aggregation needed
         return AggregatedCandles {
             level,
             candles: candle_vec.iter().map(|c| (*c).clone()).collect(),
-            source_range: (0, source.len()),
+            time_range: (time_start, time_end),
         };
     }
 
@@ -27,7 +31,7 @@ pub fn aggregate_candles(
     AggregatedCandles {
         level,
         candles: aggregated,
-        source_range: (0, source.len()),
+        time_range: (time_start, time_end),
     }
 }
 
@@ -89,8 +93,79 @@ fn aggregate_chunk_refs(chunk: &[&Candle]) -> Candle {
     }
 }
 
-/// Aggregate a range of source candles
+/// Align timestamp down to nearest boundary
+fn align_time_down(time: i64, interval: i64) -> i64 {
+    (time / interval) * interval
+}
+
+/// Align timestamp up to nearest boundary
+fn align_time_up(time: i64, interval: i64) -> i64 {
+    ((time + interval - 1) / interval) * interval
+}
+
+/// Infer interval from consecutive candles
+fn infer_interval(source: &BTreeMap<i64, Candle>) -> i64 {
+    let mut iter = source.keys();
+    if let (Some(&first), Some(&second)) = (iter.next(), iter.next()) {
+        second - first
+    } else {
+        60 * 60 * 1000 // Default 1h
+    }
+}
+
+/// Aggregate candles within a time range
+pub fn aggregate_time_range(
+    source: &BTreeMap<i64, Candle>,
+    time_start: i64,
+    time_end: i64,
+    level: AggregationLevel,
+) -> AggregatedCandles {
+    let ratio = level.ratio();
+
+    if ratio == 1 {
+        // No aggregation - return candles in range
+        let candles: Vec<Candle> = source
+            .range(time_start..=time_end)
+            .map(|(_, c)| c.clone())
+            .collect();
+
+        return AggregatedCandles {
+            level,
+            candles,
+            time_range: (time_start, time_end),
+        };
+    }
+
+    // Get timeframe interval for aligned boundaries
+    let interval_ms = infer_interval(source);
+
+    // Align to aggregation boundaries
+    let aligned_start = align_time_down(time_start, interval_ms * ratio as i64);
+    let aligned_end = align_time_up(time_end, interval_ms * ratio as i64);
+
+    // Collect candles in aligned range
+    let candles_in_range: Vec<&Candle> = source
+        .range(aligned_start..=aligned_end)
+        .map(|(_, c)| c)
+        .collect();
+
+    // Group by time bucket and aggregate
+    let aggregated = candles_in_range
+        .chunks(ratio)
+        .filter(|chunk| !chunk.is_empty())
+        .map(|chunk| aggregate_chunk_refs(chunk))
+        .collect();
+
+    AggregatedCandles {
+        level,
+        candles: aggregated,
+        time_range: (aligned_start, aligned_end),
+    }
+}
+
+/// Aggregate a range of source candles (legacy index-based, kept for compatibility)
 /// Uses globally aligned boundaries to ensure stable aggregation during panning
+#[allow(dead_code)]
 pub fn aggregate_range(
     source: &BTreeMap<i64, Candle>,
     start: usize,
@@ -108,10 +183,15 @@ pub fn aggregate_range(
             .take(end - start)
             .cloned()
             .collect();
+
+        // Calculate time range from the actual candles
+        let time_start = candles.first().map(|c| c.time).unwrap_or(0);
+        let time_end = candles.last().map(|c| c.time).unwrap_or(0);
+
         return AggregatedCandles {
             level,
             candles,
-            source_range: (start, end),
+            time_range: (time_start, time_end),
         };
     }
 
@@ -137,7 +217,12 @@ pub fn aggregate_range(
         .collect();
 
     let mut result = aggregate_candles(&slice_candles, level);
-    result.source_range = (aligned_start, slice_end);
+
+    // Update time_range based on aligned boundaries
+    let time_start = slice_candles.keys().next().copied().unwrap_or(0);
+    let time_end = slice_candles.keys().next_back().copied().unwrap_or(0);
+    result.time_range = (time_start, time_end);
+
     result
 }
 
@@ -207,7 +292,8 @@ mod tests {
         let candles = create_test_candles(100);
         let result = aggregate_range(&candles, 10, 50, AggregationLevel::Medium);
 
-        assert_eq!(result.source_range, (10, 60));
+        // time_range is now in timestamps (each candle is 1000ms apart)
+        assert_eq!(result.time_range, (10000, 59000));
         assert_eq!(result.candles.len(), 10); // 50 / 5 = 10
     }
 
@@ -246,7 +332,8 @@ mod tests {
             let result = aggregate_candles(&candles, level);
             assert_eq!(result.candles.len(), expected_count, "Failed for level {:?}", level);
             assert_eq!(result.level, level);
-            assert_eq!(result.source_range, (0, 1000));
+            // time_range is now in timestamps (first=0, last=999000)
+            assert_eq!(result.time_range, (0, 999000));
         }
     }
 
@@ -315,7 +402,8 @@ mod tests {
 
         // Test at the end of the data
         let result = aggregate_range(&candles, 90, 20, AggregationLevel::Medium);
-        assert_eq!(result.source_range, (90, 100)); // Should clamp to array bounds
+        // time_range is now in timestamps (each candle is 1000ms apart)
+        assert_eq!(result.time_range, (90000, 99000)); // Should clamp to array bounds
         assert_eq!(result.candles.len(), 2); // 10 candles / 5 = 2
     }
 

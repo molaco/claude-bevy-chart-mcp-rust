@@ -66,7 +66,7 @@ impl AggregationLevel {
 pub struct AggregatedCandles {
     pub level: AggregationLevel,
     pub candles: Vec<Candle>,
-    pub source_range: (usize, usize), // (start_index, end_index) in source data
+    pub time_range: (i64, i64),  // Was: source_range: (usize, usize)
 }
 
 /// Configuration for the aggregation system
