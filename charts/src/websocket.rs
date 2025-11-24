@@ -7,7 +7,7 @@
 use crate::types::Candle;
 
 use bevy::prelude::*;
-use bevy::tasks::IoTaskPool;
+use bevy_tokio_tasks::TokioTasksRuntime;
 use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
 use std::sync::mpsc::{channel, Receiver, Sender};
@@ -402,12 +402,14 @@ pub async fn websocket_stream(
 /// System to spawn the WebSocket task when enabled.
 ///
 /// This system checks if a WebSocket task should be started and spawns it
-/// using Bevy's IoTaskPool for background async execution.
+/// using bevy_tokio_tasks for background async execution with full Tokio runtime support.
+/// This is required because tokio_tungstenite and tokio::time require a Tokio runtime context.
 pub fn spawn_websocket_task(
     config: Res<WebSocketConfig>,
     mut state: ResMut<WebSocketState>,
     sender: Option<Res<WebSocketSender>>,
     mut commands: Commands,
+    runtime: ResMut<TokioTasksRuntime>,
 ) {
     // Don't spawn if disabled or already running
     if !config.enabled || state.task_running {
@@ -432,12 +434,11 @@ pub fn spawn_websocket_task(
     let interval = config.interval.clone();
     let reconnect_delay = config.reconnect_delay;
 
-    // Spawn the WebSocket task on the IoTaskPool
-    IoTaskPool::get()
-        .spawn(async move {
-            websocket_stream(ticker, interval, sender, reconnect_delay).await;
-        })
-        .detach();
+    // Spawn the WebSocket task on the Tokio runtime
+    // This is required because tokio_tungstenite uses tokio's TcpStream and timer
+    runtime.spawn_background_task(move |_ctx| async move {
+        websocket_stream(ticker, interval, sender, reconnect_delay).await;
+    });
 }
 
 /// System to process incoming WebSocket events and forward them to Bevy's event system.
