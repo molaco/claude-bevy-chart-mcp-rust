@@ -1,249 +1,166 @@
-# Bevy Chart
+# Chart Application
 
-A high-performance real-time candlestick charting application built with Rust and the Bevy game engine. This project started as an experiment to see how fast we could render financial charts using an ECS architecture, and it turned out pretty well.
+Real-time candlestick charting application built with Bevy and Rust. This thing started as a weekend project to visualize crypto market data and kind of spiraled into a full-featured charting system with WebSocket support, dynamic aggregation, and an AI chat interface.
 
-![Execution Flow](execution_flow.mmd.svg)
+## What's in here
 
-## What is this?
+This is a workspace with several crates that all work together:
 
-This is a desktop charting application designed for cryptocurrency trading data visualization. It connects to Binance's WebSocket API for live updates and stores historical data in DuckDB. The whole thing runs at 100+ FPS even with thousands of candles on screen.
+**charts** - The main application. Renders candlestick charts with zoom/pan controls, multiple timeframes, and real-time updates from Binance. Uses Bevy's ECS architecture for the rendering pipeline and includes a pretty aggressive optimization system (entity pooling, LOD rendering, multi-level aggregation cache).
 
-The main idea was to leverage Bevy's ECS (Entity Component System) for efficient rendering and use GPU-based lines (Gizmos) for technical indicators instead of spawning thousands of entities. Turns out this approach works really well for financial charting.
+**data-loader** - CLI tool for downloading historical market data from Binance and loading it into a DuckDB database. Can pull both trades and klines (candlesticks) for any timeframe. Also has commands for importing local ZIP archives if you already have the data.
 
-## Features
+**chart-mcp** - MCP (Model Context Protocol) server that exposes chart controls to Claude. Right now it just handles screenshot requests via Bevy's Remote Protocol, but the architecture is there to add more tools.
 
-### Charting Basics
-- **Candlestick charts** with real-time updates from Binance WebSocket
-- **Volume bars** with toggleable pane (press `V`)
-- **Interactive crosshair** that follows your mouse
-- **Pan and zoom** - drag to pan, mouse wheel to zoom (zoom coming soon)
-- **Multi-pane layout** with synchronized axes (70% price, 30% volume)
-- **Lazy loading** - loads 500 candles initially, then fetches more as you scroll
+**chat-ui** - Bevy plugin that adds a chat interface to the chart window. Integrates with Claude's API so you can ask questions about the chart or control it through natural language. Still pretty experimental but works.
 
-### Technical Indicators
-- Simple Moving Averages: SMA-20, SMA-50, SMA-200
-- GPU-accelerated rendering using Bevy Gizmos (no entity overhead)
-- Toggle individual SMAs with `1`, `2`, `3` or all with `S`
-- More indicators coming soon (RSI, MACD, Bollinger Bands)
+**bevy_ui_text_input** - Text input widget for Bevy using cosmic-text. Extracted this into its own crate because Bevy's built-in text input wasn't cutting it. Handles cursor positioning, selection, clipboard, the usual stuff.
 
-### Data Management
-- DuckDB database for historical OHLCV storage
-- Binance API integration for kline downloads
-- Real-time WebSocket streaming
-- Multi-timeframe aggregation (1m → 5m → 15m → 1h → 4h → 1d)
-- Data import from ZIP archives
+## How it works
 
-### Performance Optimizations
-We've put a lot of work into making this fast:
-- Sliding window algorithm for moving averages (O(n) instead of O(n²))
-- Incremental MA calculations when lazy loading
-- Entity pooling for candlesticks and volume bars
-- Render caching with dirty-checking
-- GPU-based line rendering for indicators
+The execution flow is documented in `logic_execution_flow.svg` if you want the full picture, but here's the gist:
 
-## Getting Started
+### Startup
+1. Parse CLI args (ticker, timeframe, date range)
+2. Load data from DuckDB
+3. Initialize Bevy with a bunch of plugins (WebSocket, Realtime, ChatUI)
+4. Pre-allocate entity pools for sprite reuse
+5. Warm up the aggregation cache
 
-### Prerequisites
-- Rust 1.70+ (we're using Edition 2021)
-- A working GPU with OpenGL/Vulkan/Metal support
-- Linux, macOS, or Windows (primarily tested on Linux)
+### Main loop
+Each frame goes through these phases in order:
 
-### Building
+**Phase 1: State updates**
+- Apply any deferred updates from lazy loading
+- Detect if we need to change aggregation level based on zoom
+
+**Phase 2: Interaction**
+- Handle mouse input (zoom, pan, crosshair)
+- Process keyboard shortcuts (timeframe switching, screenshots, toggles)
+- Check if we're approaching the edge of loaded data (triggers lazy load)
+
+**Phase 3: Rendering**
+- Render grid and axes
+- Get aggregated candles from cache (or compute them if cache miss)
+- Pick LOD level based on candle width (full wick+body, OHLC line, or just range line)
+- Pull entities from pools, update transforms, make visible
+- Render moving averages and volume bars
+- Update FPS counter and labels
+
+**Phase 4: Maintenance**
+- Every 10s: cleanup zombie entities
+- Every 30s: shrink pools if they've grown too large
+
+### Background tasks
+- **WebSocket thread**: maintains connection to Binance, streams real-time kline updates
+- **Realtime system**: buffers incoming updates, applies them with throttling, manages memory
+
+### Aggregation system
+When you zoom out far enough that rendering every candle would tank the FPS, the system automatically switches to aggregated views. There are 4 levels:
+- None: 1:1, every candle rendered
+- Low: 2x aggregation
+- Medium: 4x aggregation
+- High: 8x aggregation
+
+The aggregation cache is LRU-based with a configurable size limit. Cache hits are common during panning since the aggregation boundaries are aligned to global time buckets.
+
+## Database schema
+
+DuckDB with three tables:
+- `tickers` - symbol metadata (id, symbol, base_asset, quote_asset)
+- `klines` - OHLCV data (ticker_id, timeframe, time, open, high, low, close, volume)
+- `trades` - tick data (ticker_id, time, price, quantity, is_buyer_maker)
+
+The klines table is indexed on `(ticker_id, timeframe, time)` for fast range queries.
+
+## Usage
+
+First, download some data:
+```bash
+cargo run --bin data-loader -- klines \
+  -t BTCUSDT \
+  -i 1m \
+  -s 2024-01-01 \
+  -e 2024-12-31
+```
+
+Then fire up the chart:
+```bash
+cargo run --bin charts -- \
+  -t BTCUSDT \
+  -i 1m \
+  -s 2024-01-01 \
+  -e 2024-12-31
+```
+
+Controls:
+- Scroll to zoom
+- Click+drag to pan
+- `Ctrl+Left/Right` to switch timeframes
+- `V` to toggle volume pane
+- `F` to take a screenshot
+- `Tab` to switch focus between chart and chat
+
+## MCP Integration
+
+The chart exposes a Bevy Remote Protocol (BRP) server on port 15702. The `chart-mcp` binary wraps this with an MCP interface so Claude can interact with it.
+
+To use it, add this to your Claude desktop config:
+```json
+{
+  "mcpServers": {
+    "chart": {
+      "command": "/path/to/chart-mcp",
+      "args": []
+    }
+  }
+}
+```
+
+Right now the only tool is `chart_screenshot` which captures the chart area (crops out the chat UI on the right).
+
+## Architecture notes
+
+### Entity pooling
+Spawning/despawning Bevy entities every frame is expensive. Instead, we pre-allocate pools of sprite entities and reuse them. When a candle goes off-screen, its entity gets returned to the pool with `Visibility::Hidden`. When we need to render a new candle, we grab an entity from the pool, update its transform/color, and set it to visible.
+
+This cut frame times by ~60% at high candle counts.
+
+### Lazy loading
+When you pan close to the edge of the loaded data, the system queues an API request to fetch more candles. Results are stored in a `DeferredUpdates` resource and applied at the start of the next frame. This prevents mid-frame data races.
+
+### Frame sequencing
+The order of systems matters a lot. We run `apply_deferred_updates` very early in the frame, then `detect_aggregation_level_change` before any rendering systems touch the data. This ensures all renderers see a consistent view of the aggregation level (was getting flickering before I fixed this).
+
+### Why DuckDB?
+Originally used SQLite but switched to DuckDB for better analytical query performance. The columnar storage and vectorized execution make aggregation queries way faster, which matters when you're computing moving averages over millions of rows.
+
+## Build
+
+Requires Rust 1.75+. Should build on Linux/macOS/Windows, though I've only tested it on NixOS.
 
 ```bash
-# Build the main chart application
-cargo build --release --package charts
-
-# Build the data loader tool
-cargo build --release --package data-loader
+cargo build --release
 ```
 
-### Loading Data
+The release build is like 10x faster than debug, especially for the aggregation stuff.
 
-Before you can chart anything, you need some data. Use the data-loader tool:
+## Known issues
 
-```bash
-# Download historical klines from Binance
-./target/release/data-loader klines \
-  --ticker BTCUSDT \
-  --interval 15m \
-  --start 2024-01-01 \
-  --end 2024-01-31
+- Chat UI can get laggy when Claude sends really long responses (cosmic-text layout isn't async)
+- WebSocket reconnection logic needs work - sometimes gets stuck in a reconnect loop
+- No error handling for malformed API responses (will just panic)
+- Memory usage grows unbounded if you load a huge date range (need better chunking)
 
-# Or import from ZIP archives
-./target/release/data-loader import --path /path/to/archives
+## What's next
 
-# Check what you've got
-./target/release/data-loader stats --detailed
-```
-
-### Running the Chart
-
-```bash
-./target/release/charts \
-  --ticker BTCUSDT \
-  --timeframe 15m \
-  --start 2024-01-01 \
-  --end 2024-01-31
-```
-
-The app will connect to Binance WebSocket automatically and start receiving live updates.
-
-## Project Structure
-
-This is a Cargo workspace with several crates:
-
-```
-charts/              # Main charting application
-├── src/
-│   ├── main.rs             # App initialization and plugin setup
-│   ├── types.rs            # Core data structures (Chart, Candle, etc.)
-│   ├── rendering/          # All rendering systems
-│   │   ├── candlesticks.rs
-│   │   ├── volume.rs
-│   │   ├── crosshair.rs
-│   │   ├── grid.rs
-│   │   └── indicators.rs
-│   ├── websocket.rs        # Real-time data streaming
-│   ├── realtime.rs         # Live candle updates
-│   ├── interaction.rs      # Mouse/keyboard input
-│   ├── aggregation/        # Multi-timeframe aggregation
-│   └── api.rs              # HTTP API for fetching klines
-
-data-loader/         # CLI tool for importing data
-├── src/
-│   ├── main.rs
-│   ├── db.rs              # Database operations
-│   ├── download/          # Binance API integration
-│   └── import/            # ZIP archive handling
-
-chat-ui/             # AI chat interface (experimental)
-bevy_ui_text_input/  # Reusable text input plugin
-chart-mcp/           # Claude MCP integration
-```
-
-## Controls
-
-### Keyboard
-- `1` / `2` / `3` - Toggle SMA-20 / SMA-50 / SMA-200
-- `S` - Toggle all SMAs
-- `V` - Toggle volume pane
-- `F` - Take screenshot
-- Arrow keys - Change timeframe (coming soon)
-- `H` - Auto-fit to data (coming soon)
-
-### Mouse
-- **Left click + drag** - Pan the chart
-- **Scroll wheel** - Zoom in/out (coming soon)
-- **Hover** - Crosshair follows cursor
-
-## Architecture
-
-The execution flow diagram above shows how everything fits together. Here's the quick version:
-
-1. **Entry**: Parse CLI args, validate ticker, load initial data
-2. **Plugins**: Register WebSocket and Realtime update plugins
-3. **Setup**: Initialize DuckDB connection, load 500 candles, setup entity pools
-4. **Main Loop** (60-144 FPS):
-   - Handle user input (pan, zoom, toggles)
-   - Check for lazy load triggers at viewport edges
-   - Render pipeline: grid → candles → indicators → volume → crosshair
-   - Update UI (FPS counter, timeframe label)
-5. **Background Tasks**:
-   - WebSocket receives live kline updates
-   - Apply throttled updates to avoid overwhelming the renderer
-   - Cleanup old candles outside viewport
-
-See [DOCS.md](charts/DOCS.md) and [ARCHITECT.md](charts/ARCHITECT.md) for detailed architecture documentation.
-
-## Tech Stack
-
-- **Bevy 0.17.2** - ECS game engine for rendering and UI
-- **DuckDB** - Embedded SQL database for OHLCV data
-- **Tokio-Tungstenite** - WebSocket client
-- **Reqwest** - HTTP client for Binance API
-- **Chrono** - Date/time handling
-- **Clap** - CLI argument parsing
-
-## Performance
-
-On a decent gaming laptop (RTX 3060), this thing runs at 144 FPS with 5000+ candles visible. Moving averages are calculated using a sliding window algorithm which is about 100-1000× faster than the naive approach.
-
-We've also implemented incremental MA updates, so when you scroll and trigger a lazy load, we only calculate the new values instead of recalculating everything.
-
-Entity pooling keeps memory allocation low - candlestick and volume entities are recycled instead of constantly spawned and despawned.
-
-## Current Status
-
-This is still v0.1.0 and very much a work in progress. The core charting works well, but there's a lot of polish and features planned:
-
-**Working:**
-- Candlestick rendering with real-time updates
-- Volume bars with toggle
-- SMA indicators (20, 50, 200)
-- WebSocket live data
-- Lazy loading
-- Entity pooling
-- Cross-platform support
-
-**In Progress:**
-- Mouse wheel zoom
-- More indicators (RSI, MACD)
-- Keyboard shortcuts for timeframes
-- Bollinger Bands
-
-**Planned:**
-- Drawing tools (trendlines, Fibonacci retracements)
-- Multiple chart types (line, area, Heikin-Ashi)
-- Save/load layouts
-- Color themes
-- Settings panel
-
-See [NEXT.md](NEXT.md) for the full roadmap.
-
-## Database
-
-Data is stored in DuckDB at `~/.local/share/flowsurface/flowsurface.duckdb` by default. You can specify a custom path with `--db-path`.
-
-Schema:
-```sql
-CREATE TABLE klines (
-    ticker VARCHAR,
-    interval VARCHAR,
-    open_time BIGINT,
-    open DOUBLE,
-    high DOUBLE,
-    low DOUBLE,
-    close DOUBLE,
-    volume DOUBLE,
-    close_time BIGINT,
-    PRIMARY KEY (ticker, interval, open_time)
-);
-```
-
-## Why Bevy?
-
-Initially this was just "what if we used a game engine for charts?" The ECS architecture turned out to be really nice for this use case:
-
-- Systems naturally separate concerns (rendering, interaction, data loading)
-- Entity pooling is built into the paradigm
-- GPU-accelerated rendering out of the box
-- Cross-platform without extra work
-- Great hot-reload during development
-
-The main tradeoff is that Bevy is still relatively young and the API changes between versions. But for this kind of interactive, high-performance visualization, it's been a great fit.
-
-## Contributing
-
-This is a personal project at the moment, but feel free to open issues or PRs if you find bugs or have ideas. The code is structured to make it relatively easy to add new indicators - check out `charts/src/rendering/indicators.rs` for examples.
+Check `NEXT.md` for the roadmap, but basically:
+- More MCP tools (change timeframe, adjust indicators, export data)
+- Order book visualization
+- Multi-chart layouts
+- Better mobile/touch support
+- Plugin system for custom indicators
 
 ## License
 
-MIT or Apache 2.0, your choice (standard Rust convention).
-
-## Acknowledgments
-
-- Bevy community for the excellent game engine
-- Binance for the WebSocket API
-- DuckDB team for the fast embedded database
-- Everyone who's contributed to the Rust charting/trading ecosystem
+MIT probably? Haven't really thought about it. If you use this for something cool let me know.

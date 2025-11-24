@@ -1,0 +1,367 @@
+%%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#1a1a2e', 'primaryTextColor': '#eee', 'primaryBorderColor': '#0f3460', 'lineColor': '#16213e', 'secondaryColor': '#0f3460', 'tertiaryColor': '#e94560', 'background': '#0f0f23', 'mainBkg': '#16213e', 'secondBkg': '#0f3460'}}}%%
+
+graph TB
+    %% ============================================================================
+    %% APPLICATION STARTUP & INITIALIZATION
+    %% ============================================================================
+
+    Start([Application Start]) --> ParseCLI[Parse CLI Arguments]
+    ParseCLI --> ValidateArgs{Validate Arguments}
+
+    ValidateArgs -->|Parse Dates| ParseDates[parse_date_to_timestamp]
+    ValidateArgs -->|Resolve Ticker| ResolveTicker[resolve_ticker_id]
+    ValidateArgs -->|Check Data| ValidateData[validate_data_exists]
+
+    ParseDates --> InitBevy[Initialize Bevy App]
+    ResolveTicker --> InitBevy
+    ValidateData --> InitBevy
+
+    InitBevy --> RegisterPlugins[Register Plugins]
+    RegisterPlugins --> DefaultPlugins[DefaultPlugins + Window]
+    RegisterPlugins --> ChatUIPlugin[ChatUiPlugin]
+    RegisterPlugins --> FPSPlugin[FrameTimeDiagnosticsPlugin]
+    RegisterPlugins --> RemotePlugin[RemotePlugin - BRP/MCP]
+    RegisterPlugins --> WSPlugin[WebSocketPlugin]
+    RegisterPlugins --> RTPlugin[RealtimePlugin]
+
+    %% ============================================================================
+    %% STARTUP SYSTEMS (Run Once)
+    %% ============================================================================
+
+    RegisterPlugins --> StartupPhase{Startup Systems}
+
+    StartupPhase --> SetupLayout[setup_split_layout]
+    StartupPhase --> Setup[setup]
+    StartupPhase --> InitPools[init_entity_pools]
+    StartupPhase --> WarmupCache[warmup_aggregation_cache]
+    StartupPhase --> SetupFPS[setup_fps_counter]
+    StartupPhase --> SetupTF[setup_timeframe_label]
+
+    Setup --> LoadDB[(Load Database)]
+    LoadDB --> LoadCandles[load_candles]
+    LoadCandles --> CalcLayout[Calculate Pane Layouts]
+    CalcLayout --> InitIndicators[Initialize Moving Averages]
+    InitIndicators --> InitCrosshair[init_crosshair]
+
+    InitPools --> CreatePools[Create Entity Pools]
+    CreatePools --> PreallocSprites[Pre-allocate Sprite Entities]
+
+    WarmupCache --> WarmLevels[Warm Common Aggregation Levels]
+
+    SetupLayout --> RunLoop{Main Update Loop}
+    Setup --> RunLoop
+    InitPools --> RunLoop
+    WarmupCache --> RunLoop
+    SetupFPS --> RunLoop
+    SetupTF --> RunLoop
+
+    %% ============================================================================
+    %% WEBSOCKET PLUGIN SYSTEMS (Background)
+    %% ============================================================================
+
+    subgraph WebSocketSystems["WebSocket Systems (Background)"]
+        SpawnWS[spawn_websocket_task] --> WSStream[websocket_stream]
+        WSStream -->|Async Connection| BinanceWS[Connect to Binance WebSocket]
+        BinanceWS --> ProcessWS[process_websocket_events]
+        ProcessWS --> WSState{WebSocket State}
+        WSState -->|Connected| WSConnected[Update Connection Status]
+        WSState -->|Kline Data| WSKline[Parse Kline Event]
+        WSState -->|Error| WSError[Handle Error]
+        ProcessWS --> CheckHealth[check_connection_health]
+    end
+
+    WSPlugin --> SpawnWS
+
+    %% ============================================================================
+    %% REALTIME PLUGIN SYSTEMS (Background)
+    %% ============================================================================
+
+    subgraph RealtimeSystems["Realtime Update Systems (Background)"]
+        SetupRT[setup_realtime_connection] --> ReceiveKline[receive_kline_updates]
+        ReceiveKline --> RTState[RealtimeState Buffer]
+        RTState --> ApplyThrottled[apply_throttled_updates]
+        ApplyThrottled --> UpdateViewport[update_viewport_state]
+        UpdateViewport --> CleanupOld[cleanup_old_candles]
+        CleanupOld --> MemoryMgmt[MemoryManager Check]
+    end
+
+    RTPlugin --> SetupRT
+    WSKline -.->|Send Event| ReceiveKline
+
+    %% ============================================================================
+    %% MAIN UPDATE LOOP - FRAME SEQUENCING
+    %% ============================================================================
+
+    RunLoop --> Frame1[Frame Start]
+
+    %% Phase 1: Reset & Apply Updates
+    Frame1 --> ResetAggState[reset_aggregation_frame_state]
+    ResetAggState --> ApplyDeferred[apply_deferred_updates]
+
+    ApplyDeferred -->|Has Deferred?| CheckDeferred{Has Pending Updates?}
+    CheckDeferred -->|Yes| InsertCandles[Insert New Candles]
+    CheckDeferred -->|No| DetectLevel
+    InsertCandles --> RecalcIndicators[Recalculate Indicators]
+    RecalcIndicators --> ClearAggCache[Clear Aggregation Cache]
+
+    %% Phase 2: Detect Aggregation Level Change
+    InsertCandles --> DetectLevel[detect_aggregation_level_change]
+    ClearAggCache --> DetectLevel
+
+    DetectLevel --> CountVisible[Count Visible Candles]
+    CountVisible --> SelectLevel{Select Aggregation Level}
+    SelectLevel -->|< 2000| LevelNone[Level: None]
+    SelectLevel -->|2000-5000| LevelLow[Level: Low - 2x]
+    SelectLevel -->|5000-10000| LevelMed[Level: Medium - 4x]
+    SelectLevel -->|> 10000| LevelHigh[Level: High - 8x]
+
+    LevelNone --> CheckHysteresis{Level Changed?}
+    LevelLow --> CheckHysteresis
+    LevelMed --> CheckHysteresis
+    LevelHigh --> CheckHysteresis
+
+    CheckHysteresis -->|Yes + Cooldown OK| MarkChanged[mark_level_changed]
+    CheckHysteresis -->|No| InteractionSystems
+    MarkChanged --> InvalidateCache[Invalidate RenderCache]
+    InvalidateCache --> InteractionSystems
+
+    %% Phase 3: Interaction Systems
+    InteractionSystems[Interaction Systems] --> ToggleVolume[toggle_volume_pane]
+    InteractionSystems --> ToggleSMA[toggle_sma_indicators]
+    InteractionSystems --> CheckLazy[check_lazy_load]
+
+    ToggleVolume --> RecalcPanes[Recalculate Pane Layouts]
+    ToggleSMA --> UpdateBounds[Update Pane Bounds]
+
+    CheckLazy -->|Need Data?| LazyCheck{At Edge?}
+    LazyCheck -->|Left Edge| FetchLeft[Fetch Historical Data]
+    LazyCheck -->|Right Edge| FetchRight[Fetch Recent Data]
+    LazyCheck -->|No| MouseInput
+
+    FetchLeft --> DeferUpdate[Queue Deferred Update]
+    FetchRight --> DeferUpdate
+    DeferUpdate -.->|Next Frame| ApplyDeferred
+
+    %% Phase 4: Mouse & Keyboard Input
+    RecalcPanes --> MouseInput[handle_mouse_input]
+    UpdateBounds --> MouseInput
+
+    MouseInput --> InputType{Input Type?}
+    InputType -->|Scroll| Zoom[Zoom: Adjust visible_time_start/end]
+    InputType -->|Drag| Pan[Pan: Shift time window]
+    InputType -->|Click| Focus[Update Focus State]
+
+    Zoom --> ZoomLimit{Check Zoom Limits}
+    ZoomLimit -->|Within Limits| RecalcSpace[Recalculate ChartSpace]
+    ZoomLimit -->|Exceed Limits| MouseInput
+
+    Pan --> PanCheck{Check Boundaries}
+    PanCheck -->|Within Data| RecalcSpace
+    PanCheck -->|Out of Bounds| CheckLazy
+
+    RecalcSpace --> FitBounds[Fit Price/Volume Bounds]
+    FitBounds --> InvalidateMain[Invalidate Main Cache]
+    InvalidateMain --> UpdateCross
+
+    Focus --> UpdateCross[update_crosshair]
+    UpdateCross --> CrossVisible{Crosshair Visible?}
+    CrossVisible -->|Yes| FindNearest[Find Nearest Candle]
+    CrossVisible -->|No| TimeframeKeys
+    FindNearest --> UpdateCrossPos[Update Crosshair Position]
+    UpdateCrossPos --> InvalidateCross[Invalidate Crosshair Cache]
+    InvalidateCross --> TimeframeKeys
+
+    %% Phase 5: Timeframe Switching
+    TimeframeKeys[handle_timeframe_keyboard] --> TFInput{Ctrl + Arrow?}
+    TFInput -->|Ctrl+Right| NextTF[Next Larger Timeframe]
+    TFInput -->|Ctrl+Left| PrevTF[Previous Smaller Timeframe]
+    TFInput -->|No| ScreenshotKey
+
+    NextTF --> HandleTFChange[handle_timeframe_change]
+    PrevTF --> HandleTFChange
+
+    HandleTFChange --> LoadNewData[Load New Candles from DB]
+    LoadNewData --> RecalcTFIndicators[Recalculate Indicators]
+    RecalcTFIndicators --> HandleTFAgg[handle_timeframe_change_aggregation]
+    HandleTFAgg --> ClearTFCache[Clear Old Timeframe Cache]
+    ClearTFCache --> ResetAggLevel[Reset Aggregation Level]
+    ResetAggLevel --> InvalidateAll[Invalidate All Caches]
+    InvalidateAll --> ScreenshotKey
+
+    %% Phase 6: Screenshot & UI Updates
+    ScreenshotKey[screenshot_on_keypress] --> SSInput{F Key?}
+    SSInput -->|Yes| TakeScreenshot[take_screenshot]
+    SSInput -->|No| UpdateFPS
+    TakeScreenshot --> UpdateFPS
+
+    UpdateFPS[update_fps_counter] --> UpdateTFLabel[update_timeframe_label]
+    UpdateTFLabel --> UpdateContext[update_chart_context]
+    UpdateContext --> RenderPhase
+
+    %% ============================================================================
+    %% RENDERING PHASE
+    %% ============================================================================
+
+    RenderPhase{Rendering Phase} --> CheckRedraw{needs_redraw?}
+    CheckRedraw -->|No| PoolMaint
+    CheckRedraw -->|Yes| RenderGrid
+
+    RenderGrid[render_grid_and_axes] --> CheckGridDirty{Grid Cache Dirty?}
+    CheckGridDirty -->|Yes| DrawGrid[Draw Grid Lines & Axes]
+    CheckGridDirty -->|No| RenderCandles
+    DrawGrid --> MarkGridClean[Mark Grid Clean]
+    MarkGridClean --> RenderCandles
+
+    RenderCandles[render_candlesticks] --> GetAggLevel[Get Current Aggregation Level]
+    GetAggLevel --> GetOrAgg[AggregationCache.get_or_aggregate]
+
+    GetOrAgg --> CacheCheck{Cache Hit?}
+    CacheCheck -->|Hit| UseCached[Use Cached Candles]
+    CacheCheck -->|Miss| AggregateNow[aggregate_time_range]
+
+    AggregateNow --> AggCandles[aggregate_candles]
+    AggCandles --> AggChunk[aggregate_chunk_refs]
+    AggChunk --> StoreCache[Store in Cache]
+    StoreCache --> CheckEvict{Cache Full?}
+    CheckEvict -->|Yes| EvictLRU[Evict LRU Entries]
+    CheckEvict -->|No| UseCached
+    EvictLRU --> UseCached
+
+    UseCached --> CalcLOD[calculate_lod_level]
+    CalcLOD --> LODType{LOD Type?}
+    LODType -->|Full| RenderFull[Render Wick + Body]
+    LODType -->|OHLC| RenderOHLC[Render OHLC Line]
+    LODType -->|Range| RenderRange[Render Range Line]
+
+    RenderFull --> GetPool[EntityPools.get]
+    RenderOHLC --> GetPool
+    RenderRange --> GetPool
+
+    GetPool --> PoolAvail{Entity Available?}
+    PoolAvail -->|Yes| ReuseEntity[Reuse Pooled Entity]
+    PoolAvail -->|No| SpawnNew[Spawn New Entity]
+    SpawnNew --> AddToPool[Add to Pool]
+    AddToPool --> ReuseEntity
+
+    ReuseEntity --> UpdateTransform[Update Transform & Color]
+    UpdateTransform --> SetVisible[Set Visibility: Visible]
+    SetVisible --> RenderMA
+
+    RenderMA[render_moving_averages] --> MAVisible{Indicators Visible?}
+    MAVisible -->|Yes| DrawMA[Draw SMA Lines]
+    MAVisible -->|No| RenderVolume
+    DrawMA --> RenderVolume
+
+    RenderVolume[render_volume_bars] --> VolumePane{Volume Pane Visible?}
+    VolumePane -->|Yes| GetVolAgg[Get Aggregated Volume]
+    VolumePane -->|No| DiscoverPool
+    GetVolAgg --> RenderVolBars[Render Volume Bars]
+    RenderVolBars --> DiscoverPool
+
+    DiscoverPool[discover_and_pool_entities] --> FindPending[Find PendingPoolEntry]
+    FindPending --> AddPooled[Add to EntityPools]
+    AddPooled --> RemoveMarker[Remove Marker Component]
+    RemoveMarker --> ResetRedraw
+
+    ResetRedraw[reset_redraw_flag] --> MarkComplete[needs_redraw = false]
+    MarkComplete --> PoolMaint
+
+    %% ============================================================================
+    %% POOL MAINTENANCE (Periodic)
+    %% ============================================================================
+
+    PoolMaint[Pool Maintenance] --> CleanupTimer{Every 10s}
+    CleanupTimer -->|Yes| CleanupPools[cleanup_entity_pools]
+    CleanupTimer -->|No| ShrinkTimer
+
+    CleanupPools --> FindZombies[Find Invalid Entities]
+    FindZombies --> RemoveZombies[Remove from Pools]
+    RemoveZombies --> ShrinkTimer
+
+    ShrinkTimer{Every 30s} -->|Yes| ShrinkPools[shrink_entity_pools]
+    ShrinkTimer -->|No| FrameEnd
+
+    ShrinkPools --> CheckExcess{Pool > Target Size?}
+    CheckExcess -->|Yes| DespawnExtra[Despawn Unused Entities]
+    CheckExcess -->|No| FrameEnd
+    DespawnExtra --> FrameEnd
+
+    FrameEnd[Frame End] -.-> Frame1
+
+    %% ============================================================================
+    %% EXTERNAL MCP INTEGRATION
+    %% ============================================================================
+
+    subgraph MCPIntegration["MCP Integration (BRP)"]
+        MCPRequest[BRP Request: chart/screenshot] --> HandleScreenshot[handle_screenshot]
+        HandleScreenshot --> TempScreenshot[Take Temp Screenshot]
+        TempScreenshot --> AsyncCrop[Async Crop Thread]
+        AsyncCrop --> CropChart[Crop to Chart Area]
+        CropChart --> SaveFinal[Save Final Image]
+        SaveFinal --> DeleteTemp[Delete Temp File]
+        DeleteTemp --> ReturnPath[Return File Path]
+    end
+
+    RemotePlugin -.->|HTTP :15702| MCPRequest
+
+    %% ============================================================================
+    %% LAZY LOADING FLOW
+    %% ============================================================================
+
+    subgraph LazyLoadFlow["Lazy Loading Flow"]
+        LazyDetect[Detect Edge Proximity] --> CheckPending{Already Fetching?}
+        CheckPending -->|No| FetchAPI[API: fetch_klines_range]
+        CheckPending -->|Yes| SkipFetch[Skip Duplicate Request]
+        FetchAPI --> ParseResponse[parse_klines_response]
+        ParseResponse --> QueueDefer[Queue DeferredUpdates]
+        QueueDefer -.->|Applied Next Frame| ApplyDeferred
+    end
+
+    CheckLazy -.-> LazyDetect
+
+    %% ============================================================================
+    %% STYLING
+    %% ============================================================================
+
+    classDef startClass fill:#e94560,stroke:#c23b4f,color:#fff,stroke-width:3px
+    classDef initClass fill:#16213e,stroke:#0f3460,color:#eee,stroke-width:2px
+    classDef pluginClass fill:#533483,stroke:#3a1f5d,color:#fff,stroke-width:2px
+    classDef wsClass fill:#1a5490,stroke:#0f3460,color:#fff,stroke-width:2px
+    classDef rtClass fill:#d35400,stroke:#a04000,color:#fff,stroke-width:2px
+    classDef loopClass fill:#27ae60,stroke:#1e8449,color:#fff,stroke-width:2px
+    classDef aggClass fill:#16a085,stroke:#117864,color:#fff,stroke-width:2px
+    classDef interactClass fill:#8e44ad,stroke:#6c3483,color:#fff,stroke-width:2px
+    classDef renderClass fill:#2980b9,stroke:#1f618d,color:#fff,stroke-width:2px
+    classDef poolClass fill:#95a5a6,stroke:#7f8c8d,color:#000,stroke-width:2px
+    classDef mcpClass fill:#c0392b,stroke:#922b21,color:#fff,stroke-width:2px
+    classDef lazyClass fill:#f39c12,stroke:#d68910,color:#000,stroke-width:2px
+    classDef decisionClass fill:#34495e,stroke:#2c3e50,color:#eee,stroke-width:2px
+
+    class Start startClass
+    class ParseCLI,ValidateArgs,ParseDates,ResolveTicker,ValidateData initClass
+    class InitBevy,RegisterPlugins,DefaultPlugins,ChatUIPlugin,FPSPlugin,RemotePlugin initClass
+    class WSPlugin,RTPlugin pluginClass
+    class SpawnWS,WSStream,BinanceWS,ProcessWS,WSState,WSConnected,WSKline,WSError,CheckHealth wsClass
+    class SetupRT,ReceiveKline,RTState,ApplyThrottled,UpdateViewport,CleanupOld,MemoryMgmt rtClass
+    class Frame1,ResetAggState,ApplyDeferred,DetectLevel,InteractionSystems loopClass
+    class CountVisible,SelectLevel,LevelNone,LevelLow,LevelMed,LevelHigh,CheckHysteresis,MarkChanged,InvalidateCache aggClass
+    class GetAggLevel,GetOrAgg,CacheCheck,UseCached,AggregateNow,AggCandles,AggChunk,StoreCache,CheckEvict,EvictLRU aggClass
+    class ToggleVolume,ToggleSMA,CheckLazy,MouseInput,InputType,Zoom,Pan,Focus interactClass
+    class ZoomLimit,RecalcSpace,PanCheck,FitBounds,InvalidateMain interactClass
+    class UpdateCross,CrossVisible,FindNearest,UpdateCrossPos,InvalidateCross interactClass
+    class RenderPhase,CheckRedraw,RenderGrid,CheckGridDirty,DrawGrid,MarkGridClean renderClass
+    class RenderCandles,CalcLOD,LODType,RenderFull,RenderOHLC,RenderRange renderClass
+    class GetPool,PoolAvail,ReuseEntity,SpawnNew,AddToPool,UpdateTransform,SetVisible renderClass
+    class RenderMA,MAVisible,DrawMA,RenderVolume,VolumePane,GetVolAgg,RenderVolBars renderClass
+    class DiscoverPool,FindPending,AddPooled,RemoveMarker,ResetRedraw,MarkComplete renderClass
+    class PoolMaint,CleanupTimer,CleanupPools,FindZombies,RemoveZombies poolClass
+    class ShrinkTimer,ShrinkPools,CheckExcess,DespawnExtra poolClass
+    class CreatePools,PreallocSprites poolClass
+    class MCPRequest,HandleScreenshot,TempScreenshot,AsyncCrop,CropChart,SaveFinal,DeleteTemp,ReturnPath mcpClass
+    class LazyDetect,CheckPending,FetchAPI,ParseResponse,QueueDefer,SkipFetch lazyClass
+    class CheckDeferred,LazyCheck,TFInput,SSInput decisionClass
+
+    style WebSocketSystems fill:#0f2744,stroke:#1a5490,color:#eee
+    style RealtimeSystems fill:#5e2a0d,stroke:#d35400,color:#eee
+    style MCPIntegration fill:#4a1412,stroke:#c0392b,color:#eee
+    style LazyLoadFlow fill:#6b4a0f,stroke:#f39c12,color:#000
