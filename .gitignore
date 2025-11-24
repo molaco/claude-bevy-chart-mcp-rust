@@ -20,7 +20,15 @@ target/
 
 # Documentation (except README.md)
 *.md
+*/*.md
+**/*.md
 !README.md
+!**/README.md
+
+# Text files
+*.txt
+*/*.txt
+**/*.txt
 
 # Local dependencies (using GitHub fork instead)
 claude-agent-sdk-rust/
