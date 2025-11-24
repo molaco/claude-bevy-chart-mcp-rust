@@ -28,6 +28,14 @@ pub fn render_volume_bars(
     let volume_pane = chart.panes.iter().find(|p| matches!(p.id, PaneId::Volume));
     let price_pane = chart.panes.iter().find(|p| matches!(p.id, PaneId::Price));
     if volume_pane.is_none() || price_pane.is_none() {
+        // Hide all volume bars when volume pane doesn't exist
+        for (entity, _, _, _, mut visibility) in query.iter_mut() {
+            *visibility = Visibility::Hidden;
+            pools.volume_bars.return_entity(entity, PooledEntityType::VolumeBar);
+            if let Ok(mut pooled) = pooled_query.get_mut(entity) {
+                pooled.in_use = false;
+            }
+        }
         return;
     }
     let volume_pane = volume_pane.unwrap();
