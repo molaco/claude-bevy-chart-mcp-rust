@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["chart-mcp","charts","chat-ui","claude-agent-sdk-rust", "bevy_ui_text_input", "data-loader"]
+members = ["chart-mcp","charts","chat-ui", "bevy_ui_text_input", "data-loader"]
 
 [workspace.package]
 version = "0.1.0"

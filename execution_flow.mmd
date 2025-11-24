@@ -1,0 +1,219 @@
+%%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#2d3748', 'primaryTextColor': '#fff', 'primaryBorderColor': '#4a5568', 'lineColor': '#718096', 'secondaryColor': '#4a5568', 'tertiaryColor': '#1a202c'}}}%%
+flowchart TB
+    subgraph Entry["Application Entry"]
+        main["main()"]
+        validate["validate_cli_args()"]
+        parse_date["parse_date_to_timestamp()"]
+        resolve_ticker["resolve_ticker_id()"]
+    end
+
+    subgraph Plugins["Bevy Plugins"]
+        websocket_plugin["WebSocketPlugin"]
+        realtime_plugin["RealtimePlugin"]
+    end
+
+    subgraph Setup["Initialization Phase"]
+        setup_fn["setup()"]
+        init_pools["init_entity_pools()"]
+        init_crosshair["init_crosshair()"]
+        setup_fps["setup_fps_counter()"]
+        setup_tf["setup_timeframe_label()"]
+        warmup_cache["warmup_aggregation_cache()"]
+    end
+
+    subgraph Database["Data Loading"]
+        db["ChartDatabase"]
+        load_candles["load_candles()"]
+        check_data["check_data_exists()"]
+        get_timeframes["get_available_timeframes()"]
+    end
+
+    subgraph WebSocket["WebSocket Layer"]
+        spawn_ws["spawn_websocket_task()"]
+        ws_stream["websocket_stream()"]
+        process_ws["process_websocket_events()"]
+        ws_state["WebSocketState"]
+        check_health["check_connection_health()"]
+    end
+
+    subgraph Realtime["Realtime Updates"]
+        receive_kline["receive_kline_updates()"]
+        apply_updates["apply_throttled_updates()"]
+        realtime_state["RealtimeState"]
+        viewport_state["ViewportState"]
+        cleanup_candles["cleanup_old_candles()"]
+    end
+
+    subgraph API["HTTP API"]
+        fetch_klines["fetch_klines()"]
+        fetch_range["fetch_klines_range()"]
+        parse_response["parse_klines_response()"]
+    end
+
+    subgraph Aggregation["Data Aggregation"]
+        agg_cache["AggregationCache"]
+        get_or_agg["get_or_aggregate()"]
+        agg_candles["aggregate_candles()"]
+        agg_time_range["aggregate_time_range()"]
+        agg_range["aggregate_range()"]
+        detect_level["detect_aggregation_level_change()"]
+        agg_state["AggregationState"]
+    end
+
+    subgraph Interaction["User Interaction Systems"]
+        mouse_input["handle_mouse_input()"]
+        keyboard_tf["handle_timeframe_keyboard()"]
+        tf_change["handle_timeframe_change()"]
+        toggle_sma["toggle_sma_indicators()"]
+        toggle_vol["toggle_volume_pane()"]
+        lazy_load["check_lazy_load()"]
+        deferred["apply_deferred_updates()"]
+    end
+
+    subgraph Rendering["Rendering Systems"]
+        render_cache["RenderCache"]
+        render_candles["render_candlesticks()"]
+        render_grid["render_grid_and_axes()"]
+        render_volume["render_volume_bars()"]
+        render_ma["render_moving_averages()"]
+        update_cross["update_crosshair()"]
+    end
+
+    subgraph EntityMgmt["Entity Pool Management"]
+        entity_pools["EntityPools"]
+        discover_pool["discover_and_pool_entities()"]
+        cleanup_pools["cleanup_entity_pools()"]
+        shrink_pools["shrink_entity_pools()"]
+    end
+
+    subgraph UI["UI Updates"]
+        update_fps["update_fps_counter()"]
+        update_tf_label["update_timeframe_label()"]
+        update_ctx["update_chart_context()"]
+        screenshot["handle_screenshot()"]
+    end
+
+    subgraph ChartState["Chart State"]
+        chart["Chart"]
+        chart_space["ChartSpace"]
+        panes["Pane"]
+        interaction_state["InteractionState"]
+    end
+
+    %% Entry Flow
+    main --> validate
+    validate --> resolve_ticker
+    validate --> parse_date
+    main --> Plugins
+    main --> setup_fn
+
+    %% Plugin Setup
+    websocket_plugin --> spawn_ws
+    realtime_plugin --> receive_kline
+
+    %% Setup Flow
+    setup_fn --> db
+    setup_fn --> init_pools
+    setup_fn --> init_crosshair
+    setup_fn --> setup_fps
+    setup_fn --> setup_tf
+    setup_fn --> warmup_cache
+    db --> load_candles
+    db --> check_data
+    db --> get_timeframes
+
+    %% WebSocket Flow
+    spawn_ws --> ws_stream
+    ws_stream -->|"Connected/Kline/Error"| process_ws
+    process_ws --> ws_state
+    check_health --> ws_state
+
+    %% Realtime Flow
+    process_ws -->|"Kline data"| receive_kline
+    receive_kline --> realtime_state
+    realtime_state --> apply_updates
+    apply_updates --> chart
+    viewport_state --> cleanup_candles
+
+    %% API Flow
+    lazy_load -->|"Need more data"| fetch_klines
+    fetch_klines --> parse_response
+    fetch_range --> parse_response
+    parse_response --> chart
+
+    %% Aggregation Flow
+    warmup_cache --> agg_cache
+    get_or_agg --> agg_cache
+    agg_candles --> agg_range
+    agg_time_range --> agg_candles
+    detect_level --> agg_state
+    agg_state -->|"Level changed"| render_cache
+
+    %% Interaction Flow
+    mouse_input -->|"Zoom/Pan"| chart_space
+    mouse_input -->|"Invalidate"| render_cache
+    mouse_input --> detect_level
+    keyboard_tf --> tf_change
+    tf_change --> load_candles
+    tf_change --> agg_cache
+    toggle_sma --> render_cache
+    toggle_vol --> panes
+    lazy_load --> chart
+    deferred --> chart
+
+    %% Rendering Flow
+    render_cache -->|"Dirty check"| render_candles
+    render_candles --> entity_pools
+    render_candles --> chart_space
+    render_candles --> get_or_agg
+    render_grid --> chart_space
+    render_volume --> chart_space
+    render_volume --> get_or_agg
+    render_ma --> chart_space
+    update_cross --> chart_space
+
+    %% Entity Pool Flow
+    init_pools --> entity_pools
+    discover_pool --> entity_pools
+    cleanup_pools --> entity_pools
+    shrink_pools --> entity_pools
+    render_candles -->|"Get/Return"| entity_pools
+
+    %% UI Flow
+    update_fps --> chart
+    update_tf_label --> chart
+    update_ctx --> chart
+    screenshot --> chart
+
+    %% Chart State Connections
+    chart --> chart_space
+    chart_space --> panes
+    mouse_input --> interaction_state
+
+    %% Styling
+    classDef entryClass fill:#2b6cb0,stroke:#2c5282,color:#fff
+    classDef setupClass fill:#2f855a,stroke:#276749,color:#fff
+    classDef dataClass fill:#744210,stroke:#5a3306,color:#fff
+    classDef wsClass fill:#6b46c1,stroke:#553c9a,color:#fff
+    classDef rtClass fill:#9c4221,stroke:#7b341e,color:#fff
+    classDef apiClass fill:#2d3748,stroke:#1a202c,color:#fff
+    classDef aggClass fill:#285e61,stroke:#234e52,color:#fff
+    classDef interClass fill:#702459,stroke:#521b41,color:#fff
+    classDef renderClass fill:#1a365d,stroke:#153e75,color:#fff
+    classDef poolClass fill:#4a5568,stroke:#2d3748,color:#fff
+    classDef uiClass fill:#5a3306,stroke:#422006,color:#fff
+    classDef stateClass fill:#3c366b,stroke:#2d2d5a,color:#fff
+
+    class main,validate,parse_date,resolve_ticker entryClass
+    class setup_fn,init_pools,init_crosshair,setup_fps,setup_tf,warmup_cache setupClass
+    class db,load_candles,check_data,get_timeframes dataClass
+    class spawn_ws,ws_stream,process_ws,ws_state,check_health wsClass
+    class receive_kline,apply_updates,realtime_state,viewport_state,cleanup_candles rtClass
+    class fetch_klines,fetch_range,parse_response apiClass
+    class agg_cache,get_or_agg,agg_candles,agg_time_range,agg_range,detect_level,agg_state aggClass
+    class mouse_input,keyboard_tf,tf_change,toggle_sma,toggle_vol,lazy_load,deferred interClass
+    class render_cache,render_candles,render_grid,render_volume,render_ma,update_cross renderClass
+    class entity_pools,discover_pool,cleanup_pools,shrink_pools poolClass
+    class update_fps,update_tf_label,update_ctx,screenshot uiClass
+    class chart,chart_space,panes,interaction_state stateClass
+    class websocket_plugin,realtime_plugin wsClass

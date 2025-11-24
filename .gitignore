@@ -1,4 +1,31 @@
-/target
+# Rust build artifacts
+target/
+**/target/
+*.rlib
+*.rmeta
+
+# Cache directories
+.fastembed_cache/
+
+# Local configuration
+.mcp.json
+
+# Editor/IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Documentation (except README.md)
+*.md
+!README.md
+
+# Local dependencies (using GitHub fork instead)
+claude-agent-sdk-rust/
+
+# Project-specific
 .TRASH/
 binance-data/
 data-loader/binance-data/

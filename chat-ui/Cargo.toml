@@ -28,8 +28,8 @@ bevy = { version = "0.17.2", default-features = false, features = [
 bevy_ui_text_input = { path = "../bevy_ui_text_input" }
 cosmic-text = "0.14"
 
-# Claude SDK for AI chat
-claude-agent-sdk = { path = "../claude-agent-sdk-rust" }
+# Claude SDK for AI chat (using GitHub fork)
+claude-agent-sdk = { git = "https://github.com/molaco/claude-agent-sdk-rust", branch = "feature/mcp-complete-implementation" }
 tokio = { version = "1", features = ["full"] }
 futures = "0.3"
 bevy-tokio-tasks = "0.17"
