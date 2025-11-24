@@ -193,27 +193,33 @@ impl ChartSpace {
         let mut min_price = f64::MAX;
         let mut max_price = f64::MIN;
 
-        // Include candle highs and lows
-        // Also collect indices for indicator lookup
-        let mut visible_indices: Vec<usize> = Vec::new();
-        for (idx, (_, candle)) in visible.enumerate() {
+        // Build timestamp-to-index map for indicator value lookup
+        let timestamp_to_idx: std::collections::HashMap<i64, usize> = candles
+            .keys()
+            .enumerate()
+            .map(|(idx, &ts)| (ts, idx))
+            .collect();
+
+        // Collect visible timestamps
+        let mut visible_timestamps: Vec<i64> = Vec::new();
+        for (ts, candle) in visible {
             min_price = min_price.min(candle.low);
             max_price = max_price.max(candle.high);
-            visible_indices.push(idx);
+            visible_timestamps.push(*ts);
         }
 
-        // Include visible indicator values
-        // Note: indicators still use index-based values - this will need to be
-        // updated in a later phase when indicators are converted to time-based
+        // Include visible indicator values using global indices
         for indicator in indicators {
             if !indicator.visible {
                 continue;
             }
 
-            for &idx in &visible_indices {
-                if let Some(value) = indicator.values.get(idx).and_then(|v| *v) {
-                    min_price = min_price.min(value as f64);
-                    max_price = max_price.max(value as f64);
+            for &ts in &visible_timestamps {
+                if let Some(&global_idx) = timestamp_to_idx.get(&ts) {
+                    if let Some(value) = indicator.values.get(global_idx).and_then(|v| *v) {
+                        min_price = min_price.min(value as f64);
+                        max_price = max_price.max(value as f64);
+                    }
                 }
             }
         }
