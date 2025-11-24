@@ -18,7 +18,19 @@ This is a workspace with several crates that all work together:
 
 ## How it works
 
-The execution flow is documented in `logic_execution_flow.svg` if you want the full picture, but here's the gist:
+Two diagrams show the complete picture:
+
+### System Architecture
+![System Execution Flow](execution_flow.mmd.svg)
+
+The high-level view showing how all the major components connect and interact.
+
+### Detailed Logic Flow
+![Logic Execution Flow](logic_execution_flow.svg)
+
+Frame-by-frame execution sequence with all the phase transitions, cache checks, and rendering decisions.
+
+Here's the breakdown:
 
 ### Startup
 1. Parse CLI args (ticker, timeframe, date range)
