@@ -417,6 +417,7 @@ fn main() {
         // ============================================================================
         .add_systems(Update, reset_aggregation_frame_state) // Reset frame-local flags
         .add_systems(Update, apply_deferred_updates.after(reset_aggregation_frame_state)) // MUST run early!
+        .add_systems(Update, detect_aggregation_level_change.after(apply_deferred_updates)) // Detect level change BEFORE rendering
         .add_systems(Update, toggle_volume_pane.after(apply_deferred_updates))
         .add_systems(Update, toggle_sma_indicators.after(apply_deferred_updates))
         .add_systems(Update, check_lazy_load.after(apply_deferred_updates)) // Queues data for NEXT frame
@@ -451,6 +452,7 @@ fn main() {
                 .chain()
                 .after(handle_mouse_input)
                 .after(check_lazy_load)
+                .after(detect_aggregation_level_change) // Aggregation level determined before rendering
                 .after(handle_timeframe_change_aggregation), // Ensure all data updates complete first
         )
         .run();
@@ -876,6 +878,47 @@ fn init_entity_pools(mut commands: Commands, config: Res<EntityPoolConfig>) {
 /// This ensures the level_changed_this_frame flag is fresh for each frame
 fn reset_aggregation_frame_state(mut agg_state: ResMut<aggregation::AggregationState>) {
     agg_state.begin_frame();
+}
+
+/// Detect if aggregation level needs to change BEFORE rendering systems run
+/// This ensures all rendering systems see consistent state (fixes frame timing race)
+fn detect_aggregation_level_change(
+    chart: Res<Chart>,
+    agg_config: Res<aggregation::AggregationConfig>,
+    mut agg_state: ResMut<aggregation::AggregationState>,
+) {
+    // Skip if not ready to render
+    if !chart.needs_redraw || chart.load_status != ChartLoadStatus::Ready {
+        return;
+    }
+
+    // Count visible candles
+    let time_start = chart.visible_time_start;
+    let time_end = chart.visible_time_end;
+    let visible_count = chart.candles.range(time_start..=time_end).count();
+
+    if visible_count == 0 {
+        return;
+    }
+
+    // Determine new aggregation level
+    let new_level = if agg_config.enabled {
+        aggregation::AggregationLevel::select(visible_count, agg_config.max_renderable_candles)
+    } else {
+        aggregation::AggregationLevel::None
+    };
+
+    // Check if level should change (with hysteresis)
+    if agg_state.should_change_level(new_level, visible_count) {
+        // Level changed - mark it so all rendering systems see the same state
+        agg_state.mark_level_changed();
+
+        #[cfg(debug_assertions)]
+        println!(
+            "Aggregation level changed: {:?} -> {:?}",
+            agg_state.previous_level, agg_state.current_level
+        );
+    }
 }
 
 /// Reset the redraw flag after all rendering systems have completed

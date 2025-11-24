@@ -65,7 +65,7 @@ pub fn render_candlesticks(
     colors: Res<ChartColors>,
     agg_config: Res<AggregationConfig>,
     mut agg_cache: ResMut<AggregationCache>,
-    mut agg_state: ResMut<AggregationState>,
+    agg_state: Res<AggregationState>,  // Read-only: level detection done in detect_aggregation_level_change
     mut pools: ResMut<EntityPools>,
     mut query_wicks: Query<
         (
@@ -148,25 +148,15 @@ pub fn render_candlesticks(
     let candle_width_px = price_pane.space.viewport.width() / visible_count as f32;
     let lod_level = calculate_lod_level(candle_width_px, &config);
 
-    // Determine if aggregation is needed
-    let level = if agg_config.enabled {
-        agg_state.get_stable_level(
-            visible_count,
-            agg_config.max_renderable_candles,
-        )
-    } else {
-        AggregationLevel::None
-    };
+    // Use pre-computed aggregation level from detect_aggregation_level_change system
+    // This ensures all rendering systems see the same level (no race condition)
+    let level = agg_state.current_level;
 
-    // Track if we cleared pools this frame
-    // Use level_changed_this_frame flag to ensure ALL rendering systems see the same state
-    let pools_just_cleared = if level != agg_state.previous_level && !agg_state.level_changed_this_frame {
-        #[cfg(debug_assertions)]
-        println!(
-            "Aggregation level changed: {:?} -> {:?}, clearing entity pools",
-            agg_state.previous_level, level
-        );
+    // Check if pools need to be cleared (level changed this frame)
+    // The detection system already set level_changed_this_frame if level changed
+    let pools_just_cleared = agg_state.level_changed_this_frame;
 
+    if pools_just_cleared {
         // Return all wicks to pool
         for (entity, _, _, _, mut visibility) in query_wicks.iter_mut() {
             *visibility = Visibility::Hidden;
@@ -202,16 +192,7 @@ pub fn render_candlesticks(
                 pooled.in_use = false;
             }
         }
-
-        // Mark level changed so OTHER rendering systems (volume bars) also see the change
-        agg_state.mark_level_changed();
-        true  // Pools were cleared
-    } else if agg_state.level_changed_this_frame {
-        // Level already changed earlier this frame (shouldn't happen with current ordering, but safe)
-        true
-    } else {
-        false  // No clearing happened
-    };
+    }
 
     // Collect existing entities by candle_timestamp
     use std::collections::HashMap;
@@ -898,7 +879,7 @@ pub fn render_volume_bars(
     colors: Res<ChartColors>,
     agg_config: Res<AggregationConfig>,
     mut agg_cache: ResMut<AggregationCache>,
-    mut agg_state: ResMut<AggregationState>,
+    agg_state: Res<AggregationState>,  // Read-only: level detection done in detect_aggregation_level_change
     mut pools: ResMut<EntityPools>,
     mut query: Query<(
         Entity,
@@ -945,15 +926,9 @@ pub fn render_volume_bars(
         return;
     }
 
-    // Determine if aggregation is needed
-    let level = if agg_config.enabled {
-        agg_state.get_stable_level(
-            visible_count,
-            agg_config.max_renderable_candles,
-        )
-    } else {
-        AggregationLevel::None
-    };
+    // Use pre-computed aggregation level from detect_aggregation_level_change system
+    // This ensures all rendering systems see the same level (no race condition)
+    let level = agg_state.current_level;
 
     // Track if we cleared pools this frame
     let pools_just_cleared = agg_state.level_changed_this_frame;
