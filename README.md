@@ -18,17 +18,9 @@ This is a workspace with several crates that all work together:
 
 ## How it works
 
-Two diagrams show the complete picture:
-
-### System Architecture
 ![System Execution Flow](execution_flow.mmd.svg)
 
-The high-level view showing how all the major components connect and interact.
-
-### Detailed Logic Flow
-![Logic Execution Flow](logic_execution_flow.svg)
-
-Frame-by-frame execution sequence with all the phase transitions, cache checks, and rendering decisions.
+The diagram above shows how all the major components connect. For a detailed frame-by-frame execution sequence with phase transitions and rendering decisions, check out `logic_execution_flow.svg`.
 
 Here's the breakdown:
 
