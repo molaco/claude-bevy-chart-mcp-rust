@@ -13,6 +13,7 @@ pub fn handle_mouse_input(
     mut chart: ResMut<Chart>,
     mut interaction: ResMut<InteractionState>,
     mut render_cache: ResMut<RenderCache>,
+    mut agg_cache: ResMut<crate::aggregation::AggregationCache>,
     config: Res<CandlestickLODConfig>,
     agg_state: Res<crate::aggregation::AggregationState>,
     zoom_limit_config: Res<ZoomLimitConfig>,
@@ -118,8 +119,9 @@ pub fn handle_mouse_input(
             // Update Y-axis bounds
             update_pane_bounds(&mut chart, config.volume_y_axis_padding);
 
-            // Invalidate render cache after pane resize
+            // Invalidate caches after pane resize
             render_cache.clear_all();
+            agg_cache.clear_timeframe(&chart.timeframe);
 
             chart.needs_redraw = true;
         }
@@ -195,8 +197,9 @@ pub fn handle_mouse_input(
                 pane.space.recalculate_cache(visible_candle_count, agg_level, aggregated_count);
             }
 
-            // Invalidate render cache after pan completes
+            // Invalidate caches after pan completes
             render_cache.clear_all();
+            agg_cache.clear_timeframe(&chart.timeframe);
 
             chart.needs_redraw = true;
         }
@@ -256,8 +259,9 @@ pub fn handle_mouse_input(
                 pane.space.recalculate_cache(visible_candle_count, agg_level, aggregated_count);
             }
 
-            // Invalidate render cache after zoom completes
+            // Invalidate caches after zoom completes
             render_cache.clear_all();
+            agg_cache.clear_timeframe(&chart.timeframe);
 
             chart.needs_redraw = true;
 
