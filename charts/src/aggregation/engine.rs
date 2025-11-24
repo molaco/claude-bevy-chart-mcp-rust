@@ -2,13 +2,12 @@ use crate::types::Candle;
 use super::types::{AggregationLevel, AggregatedCandles};
 use std::collections::BTreeMap;
 
-/// Aggregate source candles at specified level
+/// Aggregate source candles at specified level using time-based bucketing
 pub fn aggregate_candles(
     source: &BTreeMap<i64, Candle>,
     level: AggregationLevel,
 ) -> AggregatedCandles {
     let ratio = level.ratio();
-    let candle_vec: Vec<&Candle> = source.values().collect();
 
     // Get time bounds for the time_range field
     let time_start = source.keys().next().copied().unwrap_or(0);
@@ -18,14 +17,29 @@ pub fn aggregate_candles(
         // No aggregation needed
         return AggregatedCandles {
             level,
-            candles: candle_vec.iter().map(|c| (*c).clone()).collect(),
+            candles: source.values().cloned().collect(),
             time_range: (time_start, time_end),
         };
     }
 
-    let aggregated = candle_vec
-        .chunks(ratio)
-        .map(|chunk| aggregate_chunk_refs(chunk))
+    // Get timeframe interval for bucket calculation
+    let interval_ms = infer_interval(source);
+    let bucket_size = interval_ms * ratio as i64;
+
+    // Group candles by time bucket (not by position!)
+    let mut buckets: BTreeMap<i64, Vec<&Candle>> = BTreeMap::new();
+
+    for (ts, candle) in source.iter() {
+        // Calculate bucket key - aligns timestamp to bucket boundary
+        let bucket_key = (*ts / bucket_size) * bucket_size;
+        buckets.entry(bucket_key).or_default().push(candle);
+    }
+
+    // Aggregate each bucket
+    let aggregated: Vec<Candle> = buckets
+        .values()
+        .filter(|bucket| !bucket.is_empty())
+        .map(|bucket| aggregate_chunk_refs(bucket))
         .collect();
 
     AggregatedCandles {
@@ -113,7 +127,7 @@ fn infer_interval(source: &BTreeMap<i64, Candle>) -> i64 {
     }
 }
 
-/// Aggregate candles within a time range
+/// Aggregate candles within a time range using time-based bucketing
 pub fn aggregate_time_range(
     source: &BTreeMap<i64, Candle>,
     time_start: i64,
@@ -136,24 +150,28 @@ pub fn aggregate_time_range(
         };
     }
 
-    // Get timeframe interval for aligned boundaries
+    // Get timeframe interval for bucket calculation
     let interval_ms = infer_interval(source);
+    let bucket_size = interval_ms * ratio as i64;
 
     // Align to aggregation boundaries
-    let aligned_start = align_time_down(time_start, interval_ms * ratio as i64);
-    let aligned_end = align_time_up(time_end, interval_ms * ratio as i64);
+    let aligned_start = align_time_down(time_start, bucket_size);
+    let aligned_end = align_time_up(time_end, bucket_size);
 
-    // Collect candles in aligned range
-    let candles_in_range: Vec<&Candle> = source
-        .range(aligned_start..=aligned_end)
-        .map(|(_, c)| c)
-        .collect();
+    // Group candles by time bucket (not by position!)
+    let mut buckets: BTreeMap<i64, Vec<&Candle>> = BTreeMap::new();
 
-    // Group by time bucket and aggregate
-    let aggregated = candles_in_range
-        .chunks(ratio)
-        .filter(|chunk| !chunk.is_empty())
-        .map(|chunk| aggregate_chunk_refs(chunk))
+    for (ts, candle) in source.range(aligned_start..=aligned_end) {
+        // Calculate bucket key - aligns timestamp to bucket boundary
+        let bucket_key = (*ts / bucket_size) * bucket_size;
+        buckets.entry(bucket_key).or_default().push(candle);
+    }
+
+    // Aggregate each bucket
+    let aggregated: Vec<Candle> = buckets
+        .values()
+        .filter(|bucket| !bucket.is_empty())
+        .map(|bucket| aggregate_chunk_refs(bucket))
         .collect();
 
     AggregatedCandles {
@@ -416,5 +434,134 @@ mod tests {
         assert_eq!(AggregationLevel::VeryHigh.ratio(), 20);
         assert_eq!(AggregationLevel::Extreme.ratio(), 50);
         assert_eq!(AggregationLevel::Maximum.ratio(), 100);
+    }
+
+    #[test]
+    fn test_aggregate_with_gaps_time_based() {
+        // Create candles with a gap in the middle (simulating market closed periods)
+        // Timestamps: 0, 1000, 2000, 5000, 6000, 7000 (gap between 2000 and 5000)
+        let mut candles = BTreeMap::new();
+        candles.insert(0, Candle { time: 0, open: 100.0, high: 105.0, low: 95.0, close: 102.0, volume: 1000.0 });
+        candles.insert(1000, Candle { time: 1000, open: 102.0, high: 108.0, low: 100.0, close: 106.0, volume: 1100.0 });
+        candles.insert(2000, Candle { time: 2000, open: 106.0, high: 110.0, low: 104.0, close: 108.0, volume: 1200.0 });
+        // Gap here - no candles at 3000 or 4000
+        candles.insert(5000, Candle { time: 5000, open: 120.0, high: 125.0, low: 118.0, close: 122.0, volume: 2000.0 });
+        candles.insert(6000, Candle { time: 6000, open: 122.0, high: 128.0, low: 120.0, close: 126.0, volume: 2100.0 });
+        candles.insert(7000, Candle { time: 7000, open: 126.0, high: 130.0, low: 124.0, close: 128.0, volume: 2200.0 });
+
+        // With Low level (ratio=2, bucket_size=2000), we should get:
+        // Bucket 0: candles at 0, 1000 -> aggregated
+        // Bucket 2000: candle at 2000 (only one, but still valid bucket)
+        // Bucket 4000: candle at 5000 (5000/2000*2000 = 4000) -> only one candle
+        // Bucket 6000: candles at 6000, 7000 -> aggregated
+        let result = aggregate_candles(&candles, AggregationLevel::Low);
+
+        // Should have 4 buckets, not 3 (which would happen with position-based chunking)
+        assert_eq!(result.candles.len(), 4);
+
+        // Verify first bucket contains candles 0 and 1000
+        assert_eq!(result.candles[0].time, 0);
+        assert_eq!(result.candles[0].open, 100.0); // First candle's open
+        assert_eq!(result.candles[0].close, 106.0); // Last candle in bucket's close
+
+        // Verify second bucket contains only candle 2000
+        assert_eq!(result.candles[1].time, 2000);
+        assert_eq!(result.candles[1].open, 106.0);
+        assert_eq!(result.candles[1].close, 108.0);
+
+        // Verify third bucket contains candle 5000 (bucket key 4000)
+        assert_eq!(result.candles[2].time, 5000);
+
+        // Verify fourth bucket contains candles 6000 and 7000
+        assert_eq!(result.candles[3].time, 6000);
+        assert_eq!(result.candles[3].close, 128.0); // Last candle's close
+    }
+
+    #[test]
+    fn test_aggregate_time_range_with_gaps() {
+        // Same gap scenario but using aggregate_time_range
+        let mut candles = BTreeMap::new();
+        candles.insert(0, Candle { time: 0, open: 100.0, high: 105.0, low: 95.0, close: 102.0, volume: 1000.0 });
+        candles.insert(1000, Candle { time: 1000, open: 102.0, high: 108.0, low: 100.0, close: 106.0, volume: 1100.0 });
+        candles.insert(2000, Candle { time: 2000, open: 106.0, high: 110.0, low: 104.0, close: 108.0, volume: 1200.0 });
+        // Gap
+        candles.insert(5000, Candle { time: 5000, open: 120.0, high: 125.0, low: 118.0, close: 122.0, volume: 2000.0 });
+        candles.insert(6000, Candle { time: 6000, open: 122.0, high: 128.0, low: 120.0, close: 126.0, volume: 2100.0 });
+        candles.insert(7000, Candle { time: 7000, open: 126.0, high: 130.0, low: 124.0, close: 128.0, volume: 2200.0 });
+
+        let result = aggregate_time_range(&candles, 0, 7000, AggregationLevel::Low);
+
+        // Time-based bucketing should produce 4 aggregated candles
+        assert_eq!(result.candles.len(), 4);
+    }
+
+    #[test]
+    fn test_panning_stability() {
+        // Verify that different pan positions produce consistent aggregations
+        // This was the main bug: panning caused candles to re-group differently
+        let candles = create_test_candles(100);
+
+        // Query overlapping ranges
+        // With Medium level (ratio=5) and interval=1000ms, bucket_size = 5000ms
+        let result1 = aggregate_time_range(&candles, 0, 50000, AggregationLevel::Medium);
+        let result2 = aggregate_time_range(&candles, 10000, 60000, AggregationLevel::Medium);
+
+        // The overlapping region should have identical aggregations for COMPLETE buckets
+        // Buckets at range edges may be partial, so we compare interior buckets only
+        // Interior buckets: 10000, 15000, 20000, 25000, 30000, 35000, 40000, 45000
+        // (excluding 50000 which is partial in result1)
+        let overlap1: Vec<_> = result1.candles.iter()
+            .filter(|c| c.time >= 10000 && c.time < 50000)
+            .collect();
+        let overlap2: Vec<_> = result2.candles.iter()
+            .filter(|c| c.time >= 10000 && c.time < 50000)
+            .collect();
+
+        assert_eq!(overlap1.len(), overlap2.len(), "Same number of complete buckets in overlap");
+
+        // Same timestamps in overlapping region should have same OHLC values
+        for (c1, c2) in overlap1.iter().zip(overlap2.iter()) {
+            assert_eq!(c1.time, c2.time, "Timestamps should match in overlapping region");
+            assert_eq!(c1.open, c2.open, "Open prices should match");
+            assert_eq!(c1.high, c2.high, "High prices should match");
+            assert_eq!(c1.low, c2.low, "Low prices should match");
+            assert_eq!(c1.close, c2.close, "Close prices should match");
+        }
+    }
+
+    #[test]
+    fn test_bucket_boundaries_globally_consistent() {
+        // Verify that the same candle always ends up in the same bucket
+        // regardless of query range
+        let candles = create_test_candles(100);
+
+        // Query different ranges that all include candle at timestamp 25000
+        let result1 = aggregate_time_range(&candles, 0, 30000, AggregationLevel::Medium);
+        let result2 = aggregate_time_range(&candles, 20000, 50000, AggregationLevel::Medium);
+        let result3 = aggregate_time_range(&candles, 25000, 35000, AggregationLevel::Medium);
+
+        // All should have a bucket starting at 25000
+        let bucket1 = result1.candles.iter().find(|c| c.time == 25000);
+        let bucket2 = result2.candles.iter().find(|c| c.time == 25000);
+        let bucket3 = result3.candles.iter().find(|c| c.time == 25000);
+
+        // All three queries should produce the same bucket for timestamp 25000
+        assert!(bucket1.is_some(), "Bucket 25000 should exist in result1");
+        assert!(bucket2.is_some(), "Bucket 25000 should exist in result2");
+        assert!(bucket3.is_some(), "Bucket 25000 should exist in result3");
+
+        let b1 = bucket1.unwrap();
+        let b2 = bucket2.unwrap();
+        let b3 = bucket3.unwrap();
+
+        // OHLC should be identical
+        assert_eq!(b1.open, b2.open);
+        assert_eq!(b1.open, b3.open);
+        assert_eq!(b1.high, b2.high);
+        assert_eq!(b1.high, b3.high);
+        assert_eq!(b1.low, b2.low);
+        assert_eq!(b1.low, b3.low);
+        assert_eq!(b1.close, b2.close);
+        assert_eq!(b1.close, b3.close);
     }
 }
