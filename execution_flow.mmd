@@ -191,18 +191,18 @@ flowchart TB
     mouse_input --> interaction_state
 
     %% Styling
-    classDef entryClass fill:#2b6cb0,stroke:#2c5282,color:#fff
-    classDef setupClass fill:#2f855a,stroke:#276749,color:#fff
-    classDef dataClass fill:#744210,stroke:#5a3306,color:#fff
-    classDef wsClass fill:#6b46c1,stroke:#553c9a,color:#fff
-    classDef rtClass fill:#9c4221,stroke:#7b341e,color:#fff
-    classDef apiClass fill:#2d3748,stroke:#1a202c,color:#fff
-    classDef aggClass fill:#285e61,stroke:#234e52,color:#fff
-    classDef interClass fill:#702459,stroke:#521b41,color:#fff
-    classDef renderClass fill:#1a365d,stroke:#153e75,color:#fff
-    classDef poolClass fill:#4a5568,stroke:#2d3748,color:#fff
-    classDef uiClass fill:#5a3306,stroke:#422006,color:#fff
-    classDef stateClass fill:#3c366b,stroke:#2d2d5a,color:#fff
+    classDef entryClass fill:#3b82f6,stroke:#1e40af,color:#fff,stroke-width:2px
+    classDef setupClass fill:#10b981,stroke:#059669,color:#fff,stroke-width:2px
+    classDef dataClass fill:#f59e0b,stroke:#d97706,color:#000,stroke-width:2px
+    classDef wsClass fill:#8b5cf6,stroke:#6d28d9,color:#fff,stroke-width:2px
+    classDef rtClass fill:#ef4444,stroke:#dc2626,color:#fff,stroke-width:2px
+    classDef apiClass fill:#6b7280,stroke:#374151,color:#fff,stroke-width:2px
+    classDef aggClass fill:#14b8a6,stroke:#0d9488,color:#fff,stroke-width:2px
+    classDef interClass fill:#ec4899,stroke:#db2777,color:#fff,stroke-width:2px
+    classDef renderClass fill:#3b82f6,stroke:#2563eb,color:#fff,stroke-width:2px
+    classDef poolClass fill:#64748b,stroke:#475569,color:#fff,stroke-width:2px
+    classDef uiClass fill:#f97316,stroke:#ea580c,color:#fff,stroke-width:2px
+    classDef stateClass fill:#a855f7,stroke:#9333ea,color:#fff,stroke-width:2px
 
     class main,validate,parse_date,resolve_ticker entryClass
     class setup_fn,init_pools,init_crosshair,setup_fps,setup_tf,warmup_cache setupClass
@@ -217,3 +217,18 @@ flowchart TB
     class update_fps,update_tf_label,update_ctx,screenshot uiClass
     class chart,chart_space,panes,interaction_state stateClass
     class websocket_plugin,realtime_plugin wsClass
+
+    %% Subgraph Styling
+    style Entry fill:#2b6cb0,stroke:#2c5282,color:#fff
+    style Plugins fill:#6b46c1,stroke:#553c9a,color:#fff
+    style Setup fill:#2f855a,stroke:#276749,color:#fff
+    style Database fill:#744210,stroke:#5a3306,color:#fff
+    style WebSocket fill:#6b46c1,stroke:#553c9a,color:#fff
+    style Realtime fill:#9c4221,stroke:#7b341e,color:#fff
+    style API fill:#2d3748,stroke:#1a202c,color:#fff
+    style Aggregation fill:#285e61,stroke:#234e52,color:#fff
+    style Interaction fill:#702459,stroke:#521b41,color:#fff
+    style Rendering fill:#1a365d,stroke:#153e75,color:#fff
+    style EntityMgmt fill:#4a5568,stroke:#2d3748,color:#fff
+    style UI fill:#5a3306,stroke:#422006,color:#fff
+    style ChartState fill:#3c366b,stroke:#2d2d5a,color:#fff
