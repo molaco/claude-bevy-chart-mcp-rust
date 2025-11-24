@@ -104,6 +104,7 @@ Controls:
 - `V` to toggle volume pane
 - `F` to take a screenshot
 - `Tab` to switch focus between chart and chat
+- `Shift+Enter` to send message in AI chat
 
 ## MCP Integration
 
