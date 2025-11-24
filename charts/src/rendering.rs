@@ -1256,15 +1256,35 @@ pub fn render_grid_and_axes(
     axes: Res<ChartAxes>,
     colors: Res<ChartColors>,
     config: Res<CandlestickLODConfig>,
-    query: Query<Entity, With<GridElement>>,
+    mut cache: ResMut<RenderCache>,
+    grid_lines_query: Query<Entity, With<GridLine>>,
+    x_labels_query: Query<Entity, With<XAxisLabel>>,
+    y_labels_query: Query<Entity, With<YAxisLabel>>,
 ) {
     if !chart.needs_redraw {
         return;
     }
 
-    // Despawn existing grid elements
-    for entity in query.iter() {
+    let x_labels_dirty = cache.is_x_labels_dirty();
+    let y_labels_dirty = cache.is_y_labels_dirty();
+
+    // Always despawn grid lines (they're cheap sprites)
+    for entity in grid_lines_query.iter() {
         commands.entity(entity).despawn();
+    }
+
+    // Only despawn X labels if dirty (text is expensive)
+    if x_labels_dirty {
+        for entity in x_labels_query.iter() {
+            commands.entity(entity).despawn();
+        }
+    }
+
+    // Only despawn Y labels if dirty (text is expensive)
+    if y_labels_dirty {
+        for entity in y_labels_query.iter() {
+            commands.entity(entity).despawn();
+        }
     }
 
     if !grid.show_grid || chart.panes.is_empty() {
@@ -1320,11 +1340,11 @@ pub fn render_grid_and_axes(
                     ..default()
                 },
                 Transform::from_translation(line_center.extend(-1.0)),
-                GridElement,
+                GridLine,
             ));
 
-            // Y-axis label on the right side
-            if axes.show_y_labels {
+            // Y-axis label on the right side (only if dirty)
+            if axes.show_y_labels && y_labels_dirty {
                 let label_x = chart_right + 50.0;
 
                 // Format based on pane type
@@ -1342,7 +1362,7 @@ pub fn render_grid_and_axes(
                     TextColor(axes.label_color),
                     Anchor::CENTER_LEFT,
                     Transform::from_translation(Vec3::new(label_x, y, 2.0)),
-                    GridElement,
+                    YAxisLabel,
                 ));
             }
         }
@@ -1362,7 +1382,7 @@ pub fn render_grid_and_axes(
                 ..default()
             },
             Transform::from_translation(Vec3::new(viewport.center().x, viewport.max.y, 0.4)),
-            GridElement,
+            GridLine,
         ));
 
         // Bottom border
@@ -1373,7 +1393,7 @@ pub fn render_grid_and_axes(
                 ..default()
             },
             Transform::from_translation(Vec3::new(viewport.center().x, viewport.min.y, 0.4)),
-            GridElement,
+            GridLine,
         ));
 
         // Left border
@@ -1384,7 +1404,7 @@ pub fn render_grid_and_axes(
                 ..default()
             },
             Transform::from_translation(Vec3::new(viewport.min.x, viewport.center().y, 0.4)),
-            GridElement,
+            GridLine,
         ));
 
         // Right border
@@ -1395,7 +1415,7 @@ pub fn render_grid_and_axes(
                 ..default()
             },
             Transform::from_translation(Vec3::new(viewport.max.x, viewport.center().y, 0.4)),
-            GridElement,
+            GridLine,
         ));
     }
 
@@ -1423,7 +1443,7 @@ pub fn render_grid_and_axes(
                     ..default()
                 },
                 Transform::from_translation(Vec3::new(gap_center_x, line_y, 0.6)),
-                GridElement,
+                GridLine,
             ));
         }
     }
@@ -1447,13 +1467,13 @@ pub fn render_grid_and_axes(
                     ..default()
                 },
                 Transform::from_translation(line_center.extend(-1.0)),
-                GridElement,
+                GridLine,
             ));
         }
     }
 
     // ========== X-AXIS TIME LABELS (at bottom of last pane) ==========
-    if axes.show_x_labels {
+    if axes.show_x_labels && x_labels_dirty {
         let time_range = time_end - time_start;
         for i in 0..=grid.x_tick_count {
             let t = i as f32 / grid.x_tick_count as f32;
@@ -1476,9 +1496,17 @@ pub fn render_grid_and_axes(
                 TextColor(axes.label_color),
                 Anchor::CENTER,
                 Transform::from_translation(Vec3::new(x, label_y, 2.0)),
-                GridElement,
+                XAxisLabel,
             ));
         }
+    }
+
+    // Mark label caches as clean after rendering
+    if x_labels_dirty {
+        cache.mark_x_labels_clean();
+    }
+    if y_labels_dirty {
+        cache.mark_y_labels_clean();
     }
 }
 

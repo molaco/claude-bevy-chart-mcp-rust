@@ -1062,6 +1062,21 @@ pub struct IndicatorElement;
 #[derive(Component)]
 pub struct GridElement;
 
+/// Marker component for grid lines (horizontal and vertical)
+/// These are cheap sprites that can be redrawn every frame
+#[derive(Component)]
+pub struct GridLine;
+
+/// Marker component for X-axis (time) labels
+/// These are expensive text elements, only redraw when x_labels_dirty
+#[derive(Component)]
+pub struct XAxisLabel;
+
+/// Marker component for Y-axis (price) labels
+/// These are expensive text elements, only redraw when y_labels_dirty
+#[derive(Component)]
+pub struct YAxisLabel;
+
 /// Marker component for crosshair elements
 #[derive(Component)]
 pub struct CrosshairElement;
