@@ -1,171 +1,170 @@
-# Chart Application
+# Chart Final 3
 
-Real-time candlestick charting application built with Bevy and Rust. This thing started as a weekend project to visualize crypto market data and kind of spiraled into a full-featured charting system with WebSocket support, dynamic aggregation, and an AI chat interface.
+A real-time financial chart visualization system built with Bevy (Rust game engine) featuring AI-powered chat integration via Claude.
 
-## What's in here
+![App Screenshot](screenshot-2025-11-25-14-04-39.png)
 
-This is a workspace with several crates that all work together:
+## Overview
 
-**charts** - The main application. Renders candlestick charts with zoom/pan controls, multiple timeframes, and real-time updates from Binance. Uses Bevy's ECS architecture for the rendering pipeline and includes a pretty aggressive optimization system (entity pooling, LOD rendering, multi-level aggregation cache).
+This workspace provides a complete solution for visualizing cryptocurrency candlestick charts with:
+- Real-time WebSocket updates from Binance
+- Interactive pan/zoom navigation
+- AI chat assistant powered by Claude
+- Screenshot capabilities via MCP (Model Context Protocol)
+- Historical data loading from DuckDB
 
-**data-loader** - CLI tool for downloading historical market data from Binance and loading it into a DuckDB database. Can pull both trades and klines (candlesticks) for any timeframe. Also has commands for importing local ZIP archives if you already have the data.
+## Architecture
 
-**chart-mcp** - MCP (Model Context Protocol) server that exposes chart controls to Claude. Right now it just handles screenshot requests via Bevy's Remote Protocol, but the architecture is there to add more tools.
+![Architecture Diagram](architecture.svg)
 
-**chat-ui** - Bevy plugin that adds a chat interface to the chart window. Integrates with Claude's API so you can ask questions about the chart or control it through natural language. Still pretty experimental but works.
+### Crates
 
-**bevy_ui_text_input** - Text input widget for Bevy using cosmic-text. Extracted this into its own crate because Bevy's built-in text input wasn't cutting it. Handles cursor positioning, selection, clipboard, the usual stuff.
+| Crate | Type | Description |
+|-------|------|-------------|
+| **charts** | Binary | Main Bevy application - renders candlestick charts with real-time updates |
+| **chart-mcp** | Binary | MCP server - bridges Claude AI with the chart app via Bevy Remote Protocol |
+| **chat-ui** | Library | Bevy plugin - embedded chat UI with Claude integration |
+| **data-loader** | Binary/Lib | CLI tool - downloads and imports Binance market data into DuckDB |
+| **bevy_ui_text_input** | Library | Text input widget for Bevy UI |
+| **claude-agent-sdk-rust** | Library | Rust SDK for Claude's agent API |
 
-## How it works
+### Key Technologies
 
-![System Execution Flow](execution_flow.mmd.svg)
+- **Bevy 0.17**: Entity-Component-System game engine for rendering
+- **DuckDB**: Embedded analytical database for market data storage
+- **tokio-tungstenite**: Async WebSocket client for real-time data
+- **Claude Agent SDK**: AI integration for chart analysis
 
-The diagram above shows how all the major components connect. For a detailed frame-by-frame execution sequence with phase transitions and rendering decisions, check out `logic_execution_flow.svg`.
+## Execution Flow
 
-Here's the breakdown:
+![Execution Flow Diagram](execution_flow.svg)
 
-### Startup
-1. Parse CLI args (ticker, timeframe, date range)
-2. Load data from DuckDB
-3. Initialize Bevy with a bunch of plugins (WebSocket, Realtime, ChatUI)
-4. Pre-allocate entity pools for sprite reuse
-5. Warm up the aggregation cache
+### Startup Phase
 
-### Main loop
-Each frame goes through these phases in order:
+1. Parse CLI arguments (ticker, timeframe, date range)
+2. Validate data existence in DuckDB
+3. Initialize Bevy app with plugins:
+   - `DefaultPlugins` - Core Bevy functionality
+   - `ChatUiPlugin` - Chat interface with Claude
+   - `WebSocketPlugin` - Real-time Binance connection
+   - `RealtimePlugin` - Live candle updates
+   - `RemotePlugin` - BRP for MCP integration
+4. Load historical candles from database
+5. Setup rendering systems and entity pools
+6. Establish WebSocket connection to Binance
 
-**Phase 1: State updates**
-- Apply any deferred updates from lazy loading
-- Detect if we need to change aggregation level based on zoom
+### Main Loop (per frame)
 
-**Phase 2: Interaction**
-- Handle mouse input (zoom, pan, crosshair)
-- Process keyboard shortcuts (timeframe switching, screenshots, toggles)
-- Check if we're approaching the edge of loaded data (triggers lazy load)
-
-**Phase 3: Rendering**
-- Render grid and axes
-- Get aggregated candles from cache (or compute them if cache miss)
-- Pick LOD level based on candle width (full wick+body, OHLC line, or just range line)
-- Pull entities from pools, update transforms, make visible
-- Render moving averages and volume bars
-- Update FPS counter and labels
-
-**Phase 4: Maintenance**
-- Every 10s: cleanup zombie entities
-- Every 30s: shrink pools if they've grown too large
-
-### Background tasks
-- **WebSocket thread**: maintains connection to Binance, streams real-time kline updates
-- **Realtime system**: buffers incoming updates, applies them with throttling, manages memory
-
-### Aggregation system
-When you zoom out far enough that rendering every candle would tank the FPS, the system automatically switches to aggregated views. There are 4 levels:
-- None: 1:1, every candle rendered
-- Low: 2x aggregation
-- Medium: 4x aggregation
-- High: 8x aggregation
-
-The aggregation cache is LRU-based with a configurable size limit. Cache hits are common during panning since the aggregation boundaries are aligned to global time buckets.
-
-## Database schema
-
-DuckDB with three tables:
-- `tickers` - symbol metadata (id, symbol, base_asset, quote_asset)
-- `klines` - OHLCV data (ticker_id, timeframe, time, open, high, low, close, volume)
-- `trades` - tick data (ticker_id, time, price, quantity, is_buyer_maker)
-
-The klines table is indexed on `(ticker_id, timeframe, time)` for fast range queries.
+1. **Input Phase**: Focus management, mouse/keyboard handling
+2. **Data Phase**: Apply deferred updates, aggregation level detection, lazy loading
+3. **Real-time Phase**: Process WebSocket events, throttled candle updates
+4. **Chat Phase**: Send/receive Claude messages, process tool calls
+5. **Rendering Phase**: Grid, candlesticks, indicators, volume, crosshair
 
 ## Usage
 
-First, download some data:
+### Prerequisites
+
+```bash
+# Install Rust (nightly recommended for Bevy)
+rustup default nightly
+
+# Database must exist with market data
+# Default path: ~/.local/share/flowsurface/flowsurface.duckdb
+```
+
+### Download Market Data
+
 ```bash
 cargo run --bin data-loader -- klines \
   -t BTCUSDT \
   -i 1m \
   -s 2024-01-01 \
-  -e 2024-12-31
+  -e 2024-01-31
 ```
 
-Then fire up the chart:
+### Run the Chart Application
+
 ```bash
 cargo run --bin charts -- \
-  -t BTCUSDT \
-  -i 1m \
-  -s 2024-01-01 \
-  -e 2024-12-31
+  --ticker BTCUSDT \
+  --timeframe 1m \
+  --start 2024-01-01 \
+  --end 2024-01-31
 ```
 
-Controls:
-- Scroll to zoom
-- Click+drag to pan
-- `Ctrl+Left/Right` to switch timeframes
-- `V` to toggle volume pane
-- `F` to take a screenshot
-- `Tab` to switch focus between chart and chat
-- `Shift+Enter` to send message in AI chat
+### Keyboard Controls
+
+| Key | Action |
+|-----|--------|
+| `Tab` | Switch focus between chart and chat |
+| `Ctrl+Left/Right` | Change timeframe |
+| `V` | Toggle volume pane |
+| `F` | Take screenshot |
+| `M` | Toggle moving averages |
+
+### Mouse Controls
+
+- **Scroll**: Zoom in/out
+- **Drag**: Pan chart
+- **Hover**: Show crosshair with OHLCV values
 
 ## MCP Integration
 
-The chart exposes a Bevy Remote Protocol (BRP) server on port 15702. The `chart-mcp` binary wraps this with an MCP interface so Claude can interact with it.
-
-To use it, add this to your Claude desktop config:
-```json
-{
-  "mcpServers": {
-    "chart": {
-      "command": "/path/to/chart-mcp",
-      "args": []
-    }
-  }
-}
-```
-
-Right now the only tool is `chart_screenshot` which captures the chart area (crops out the chat UI on the right).
-
-## Architecture notes
-
-### Entity pooling
-Spawning/despawning Bevy entities every frame is expensive. Instead, we pre-allocate pools of sprite entities and reuse them. When a candle goes off-screen, its entity gets returned to the pool with `Visibility::Hidden`. When we need to render a new candle, we grab an entity from the pool, update its transform/color, and set it to visible.
-
-This cut frame times by ~60% at high candle counts.
-
-### Lazy loading
-When you pan close to the edge of the loaded data, the system queues an API request to fetch more candles. Results are stored in a `DeferredUpdates` resource and applied at the start of the next frame. This prevents mid-frame data races.
-
-### Frame sequencing
-The order of systems matters a lot. We run `apply_deferred_updates` very early in the frame, then `detect_aggregation_level_change` before any rendering systems touch the data. This ensures all renderers see a consistent view of the aggregation level (was getting flickering before I fixed this).
-
-### Why DuckDB?
-Originally used SQLite but switched to DuckDB for better analytical query performance. The columnar storage and vectorized execution make aggregation queries way faster, which matters when you're computing moving averages over millions of rows.
-
-## Build
-
-Requires Rust 1.75+. Should build on Linux/macOS/Windows, though I've only tested it on NixOS.
+The `chart-mcp` server exposes chart functionality to Claude:
 
 ```bash
-cargo build --release
+# Run MCP server (stdio-based)
+cargo run --bin chart-mcp
 ```
 
-The release build is like 10x faster than debug, especially for the aggregation stuff.
+### Available Tools
 
-## Known issues
+- `chart_screenshot`: Capture current chart state as PNG
 
-- Chat UI can get laggy when Claude sends really long responses (cosmic-text layout isn't async)
-- WebSocket reconnection logic needs work - sometimes gets stuck in a reconnect loop
-- No error handling for malformed API responses (will just panic)
-- Memory usage grows unbounded if you load a huge date range (need better chunking)
+## Module Structure
 
-## What's next
+### charts (Main Application)
 
-Check `NEXT.md` for the roadmap, but basically:
-- More MCP tools (change timeframe, adjust indicators, export data)
-- Order book visualization
-- Multi-chart layouts
-- Better mobile/touch support
-- Plugin system for custom indicators
+```
+charts/
+├── aggregation/     # Candle aggregation for different zoom levels
+├── api/             # Binance REST API client
+├── cache/           # Render cache and throttling
+├── error/           # Error types
+├── focus/           # UI focus management
+├── interaction/     # Mouse/keyboard input handling
+├── realtime/        # Live data processing
+├── rendering/       # Candlesticks, grid, indicators, volume
+├── screenshot/      # Screenshot capture and cropping
+├── theme/           # Color configuration
+├── types/           # Core data structures
+├── ui_layout/       # Split layout (chart + chat)
+└── websocket/       # Binance WebSocket streaming
+```
+
+### data-loader
+
+```
+data-loader/
+├── db/              # DuckDB database management
+├── download/        # Binance data downloader
+│   ├── binance/     # API client and parsing
+│   └── progress/    # Download progress tracking
+└── import/          # ZIP archive import
+    ├── archive/     # Archive extraction
+    └── helpers/     # ID generation, exchange lookup
+```
+
+## Building Diagrams
+
+Regenerate the architecture diagrams:
+
+```bash
+nix-shell -p mermaid-cli --run "mmdc -i architecture.mmd -o architecture.svg --configFile ../my-hypergraph/.diagrams/config.json"
+nix-shell -p mermaid-cli --run "mmdc -i execution_flow.mmd -o execution_flow.svg --configFile ../my-hypergraph/.diagrams/config.json"
+```
 
 ## License
 
-MIT probably? Haven't really thought about it. If you use this for something cool let me know.
+MIT

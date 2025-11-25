@@ -37,4 +37,7 @@ claude-agent-sdk-rust/
 .TRASH/
 binance-data/
 data-loader/binance-data/
+
+# Screenshots (exclude auto-generated, keep documentation screenshots)
 screenshot-*.png
+!screenshot-2025-11-25-14-04-39.png

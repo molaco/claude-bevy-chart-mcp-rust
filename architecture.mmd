@@ -1,0 +1,171 @@
+%%{init: {'theme': 'base', 'themeVariables': {'primaryColor': '#fff', 'primaryTextColor': '#000', 'lineColor': '#666'}}}%%
+graph TB
+    subgraph External["External Services"]
+        Binance["Binance API<br/>(WebSocket + REST)"]
+        Claude["Claude API<br/>(Anthropic)"]
+    end
+
+    subgraph Data["Data Layer"]
+        DuckDB[(DuckDB<br/>Market Data)]
+        DataLoader["data-loader<br/>(CLI Binary)"]
+    end
+
+    subgraph Charts["charts (Main Bevy App)"]
+        subgraph Core["Core Systems"]
+            MainLoop["Bevy App Loop"]
+            Setup["Setup System"]
+            Interaction["Interaction System"]
+        end
+
+        subgraph DataMgmt["Data Management"]
+            ChartDB["ChartDatabase"]
+            Aggregation["Aggregation Engine<br/>+ Cache"]
+            Types["Chart/Candle Types"]
+        end
+
+        subgraph Realtime["Real-time"]
+            WSPlugin["WebSocket Plugin"]
+            RTPlugin["Realtime Plugin"]
+        end
+
+        subgraph Render["Rendering"]
+            Candlesticks["Candlestick Renderer"]
+            Volume["Volume Renderer"]
+            Grid["Grid & Axes"]
+            Indicators["Moving Averages"]
+            Crosshair["Crosshair System"]
+        end
+
+        subgraph UI["UI"]
+            FPS["FPS Counter"]
+            TimeframeLabel["Timeframe Label"]
+            Screenshot["Screenshot System"]
+        end
+
+        BRP["Bevy Remote Protocol<br/>(HTTP :15702)"]
+    end
+
+    subgraph ChatUI["chat-ui (Bevy Plugin)"]
+        ChatPlugin["ChatUiPlugin"]
+        ChatLayout["Chat Layout"]
+        ChatInput["Text Input"]
+        ChatMessages["Message Display"]
+        ClaudeClient["Claude Client<br/>(Async Task)"]
+    end
+
+    subgraph MCP["chart-mcp (MCP Server)"]
+        MCPServer["MCP Server<br/>(stdio)"]
+        BRPClient["BRP Client"]
+        ScreenshotTool["Screenshot Tool"]
+    end
+
+    subgraph SDK["SDK Libraries"]
+        AgentSDK["claude-agent-sdk-rust"]
+        TextInput["bevy_ui_text_input"]
+    end
+
+    %% Data flow connections
+    Binance -->|"Historical Data"| DataLoader
+    DataLoader -->|"Import"| DuckDB
+    DuckDB -->|"Load Candles"| ChartDB
+    Binance -->|"Live Klines"| WSPlugin
+
+    %% Chart internal flow
+    ChartDB --> Types
+    Types --> Aggregation
+    Aggregation --> Candlesticks
+    Aggregation --> Volume
+    Types --> Indicators
+    WSPlugin --> RTPlugin
+    RTPlugin --> Types
+
+    %% Rendering chain
+    MainLoop --> Setup
+    MainLoop --> Interaction
+    Interaction --> Candlesticks
+    Interaction --> Crosshair
+    Candlesticks --> Grid
+    Volume --> Grid
+
+    %% Chat integration
+    ChatPlugin --> ChatLayout
+    ChatLayout --> ChatInput
+    ChatLayout --> ChatMessages
+    ChatInput --> ClaudeClient
+    ClaudeClient -->|"API Calls"| Claude
+    ClaudeClient -->|"MCP Tools"| BRP
+    TextInput --> ChatInput
+    AgentSDK --> ClaudeClient
+
+    %% MCP integration
+    Claude -->|"Tool Calls"| MCPServer
+    MCPServer --> BRPClient
+    BRPClient -->|"HTTP"| BRP
+    BRP --> Screenshot
+    ScreenshotTool --> BRPClient
+
+    %% Subgraph styling
+    style External fill:#2d3748,stroke:#4a5568,stroke-width:2px,color:#fff
+    style Data fill:#1a365d,stroke:#2c5282,stroke-width:2px,color:#fff
+    style Charts fill:#22543d,stroke:#276749,stroke-width:2px,color:#fff
+    style Core fill:#2f855a,stroke:#38a169,stroke-width:1px,color:#fff
+    style DataMgmt fill:#2f855a,stroke:#38a169,stroke-width:1px,color:#fff
+    style Realtime fill:#2f855a,stroke:#38a169,stroke-width:1px,color:#fff
+    style Render fill:#2f855a,stroke:#38a169,stroke-width:1px,color:#fff
+    style UI fill:#2f855a,stroke:#38a169,stroke-width:1px,color:#fff
+    style ChatUI fill:#553c9a,stroke:#6b46c1,stroke-width:2px,color:#fff
+    style MCP fill:#744210,stroke:#975a16,stroke-width:2px,color:#fff
+    style SDK fill:#702459,stroke:#97266d,stroke-width:2px,color:#fff
+
+    %% Node styling - External (light on dark gray)
+    style Binance fill:#e2e8f0,stroke:#a0aec0,stroke-width:2px,color:#1a202c
+    style Claude fill:#e2e8f0,stroke:#a0aec0,stroke-width:2px,color:#1a202c
+
+    %% Node styling - Data Layer (light blue on dark blue)
+    style DuckDB fill:#bee3f8,stroke:#63b3ed,stroke-width:2px,color:#1a365d
+    style DataLoader fill:#bee3f8,stroke:#63b3ed,stroke-width:2px,color:#1a365d
+
+    %% Node styling - Charts main (light green on dark green)
+    style BRP fill:#c6f6d5,stroke:#68d391,stroke-width:2px,color:#22543d
+
+    %% Node styling - Core Systems
+    style MainLoop fill:#c6f6d5,stroke:#68d391,stroke-width:2px,color:#22543d
+    style Setup fill:#c6f6d5,stroke:#68d391,stroke-width:2px,color:#22543d
+    style Interaction fill:#c6f6d5,stroke:#68d391,stroke-width:2px,color:#22543d
+
+    %% Node styling - Data Management
+    style ChartDB fill:#c6f6d5,stroke:#68d391,stroke-width:2px,color:#22543d
+    style Aggregation fill:#c6f6d5,stroke:#68d391,stroke-width:2px,color:#22543d
+    style Types fill:#c6f6d5,stroke:#68d391,stroke-width:2px,color:#22543d
+
+    %% Node styling - Real-time
+    style WSPlugin fill:#c6f6d5,stroke:#68d391,stroke-width:2px,color:#22543d
+    style RTPlugin fill:#c6f6d5,stroke:#68d391,stroke-width:2px,color:#22543d
+
+    %% Node styling - Rendering
+    style Candlesticks fill:#c6f6d5,stroke:#68d391,stroke-width:2px,color:#22543d
+    style Volume fill:#c6f6d5,stroke:#68d391,stroke-width:2px,color:#22543d
+    style Grid fill:#c6f6d5,stroke:#68d391,stroke-width:2px,color:#22543d
+    style Indicators fill:#c6f6d5,stroke:#68d391,stroke-width:2px,color:#22543d
+    style Crosshair fill:#c6f6d5,stroke:#68d391,stroke-width:2px,color:#22543d
+
+    %% Node styling - UI
+    style FPS fill:#c6f6d5,stroke:#68d391,stroke-width:2px,color:#22543d
+    style TimeframeLabel fill:#c6f6d5,stroke:#68d391,stroke-width:2px,color:#22543d
+    style Screenshot fill:#c6f6d5,stroke:#68d391,stroke-width:2px,color:#22543d
+
+    %% Node styling - Chat UI (light purple on dark purple)
+    style ChatPlugin fill:#e9d8fd,stroke:#b794f4,stroke-width:2px,color:#44337a
+    style ChatLayout fill:#e9d8fd,stroke:#b794f4,stroke-width:2px,color:#44337a
+    style ChatInput fill:#e9d8fd,stroke:#b794f4,stroke-width:2px,color:#44337a
+    style ChatMessages fill:#e9d8fd,stroke:#b794f4,stroke-width:2px,color:#44337a
+    style ClaudeClient fill:#e9d8fd,stroke:#b794f4,stroke-width:2px,color:#44337a
+
+    %% Node styling - MCP (light orange on dark orange)
+    style MCPServer fill:#feebc8,stroke:#ed8936,stroke-width:2px,color:#744210
+    style BRPClient fill:#feebc8,stroke:#ed8936,stroke-width:2px,color:#744210
+    style ScreenshotTool fill:#feebc8,stroke:#ed8936,stroke-width:2px,color:#744210
+
+    %% Node styling - SDK (light pink on dark pink)
+    style AgentSDK fill:#fed7e2,stroke:#ed64a6,stroke-width:2px,color:#702459
+    style TextInput fill:#fed7e2,stroke:#ed64a6,stroke-width:2px,color:#702459
