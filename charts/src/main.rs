@@ -61,8 +61,8 @@ fn setup(mut commands: Commands) {
         .expect("Failed to open database");
 
     // Load initial data
-    let ticker_id = 1; // BTCUSDT
-    let timeframe = "15m";
+    let ticker_id = 4; // ticker with 1m data
+    let timeframe = "1m";
 
     // Get time range and load most recent candles
     let (min_time, max_time) = db.get_time_range(ticker_id, timeframe)

@@ -208,6 +208,7 @@ pub fn check_lazy_load(
 
         // Calculate start time based on timeframe
         let interval_ms = match chart.timeframe.as_str() {
+            "1m" => 60 * 1000,
             "15m" => 15 * 60 * 1000,
             "1h" => 60 * 60 * 1000,
             "4h" => 4 * 60 * 60 * 1000,
@@ -264,6 +265,7 @@ pub fn check_lazy_load(
 
         let load_start_time = chart.candles.last().unwrap().time;
         let interval_ms = match chart.timeframe.as_str() {
+            "1m" => 60 * 1000,
             "15m" => 15 * 60 * 1000,
             "1h" => 60 * 60 * 1000,
             "4h" => 4 * 60 * 60 * 1000,
