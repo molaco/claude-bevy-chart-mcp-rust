@@ -1,15 +1,15 @@
-mod types;
-mod rendering;
 mod interaction;
+mod rendering;
+mod types;
 
+use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
 use bevy::prelude::*;
-use bevy::diagnostic::{FrameTimeDiagnosticsPlugin, DiagnosticsStore};
-use bevy::window::PresentMode;
-use bevy::render::view::window::screenshot::ScreenshotManager;
-use types::*;
-use rendering::*;
+use bevy::render::view::screenshot::{save_to_disk, Screenshot};
+use bevy::window::{PresentMode, WindowResolution};
 use interaction::*;
+use rendering::*;
 use rendering::{CandlestickInstancedPlugin, InstancingEnabled};
+use types::*;
 
 // ============================================================================
 // MAIN
@@ -20,32 +20,33 @@ fn main() {
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: "Bevy Candlestick Chart".to_string(),
-                resolution: (1600.0, 900.0).into(),
+                resolution: WindowResolution::new(1600, 900),
                 present_mode: PresentMode::AutoNoVsync, // Disable VSync for uncapped FPS
                 ..default()
             }),
             ..default()
         }))
-        .add_plugins(FrameTimeDiagnosticsPlugin)
+        .add_plugins(FrameTimeDiagnosticsPlugin::default())
         .add_plugins(CandlestickInstancedPlugin)
         .add_systems(Startup, setup)
         .add_systems(Startup, setup_fps_counter)
-        .add_systems(Update, (
-            handle_mouse_input,
-            update_crosshair,
-        ).chain())  // Ensures crosshair updates immediately after mouse input
+        .add_systems(Update, (handle_mouse_input, update_crosshair).chain()) // Ensures crosshair updates immediately after mouse input
         .add_systems(Update, toggle_volume_pane)
         .add_systems(Update, toggle_sma_indicators)
         .add_systems(Update, check_lazy_load)
         .add_systems(Update, screenshot_on_keypress)
         .add_systems(Update, update_fps_counter)
-        .add_systems(Update, (
-            render_grid_and_axes,
-            // render_candlesticks,  // Disabled - using GPU instancing instead
-            render_moving_averages,
-            render_volume_bars,
-            reset_redraw_flag,
-        ).chain())  // Run rendering systems in sequence, then reset flag
+        .add_systems(
+            Update,
+            (
+                render_grid_and_axes,
+                // render_candlesticks,  // Disabled - using GPU instancing instead
+                render_moving_averages,
+                render_volume_bars,
+                reset_redraw_flag,
+            )
+                .chain(),
+        ) // Run rendering systems in sequence, then reset flag
         .run();
 }
 
@@ -55,24 +56,25 @@ fn main() {
 
 fn setup(mut commands: Commands) {
     // Spawn camera
-    commands.spawn(Camera2dBundle::default());
+    commands.spawn(Camera2d);
 
     // Initialize database connection
     let db_path = "/home/molaco/.local/share/flowsurface/flowsurface.duckdb";
-    let db = ChartDatabase::new(db_path)
-        .expect("Failed to open database");
+    let db = ChartDatabase::new(db_path).expect("Failed to open database");
 
     // Load initial data
     let ticker_id = 4; // ticker with 1m data
     let timeframe = "1m";
 
     // Get time range and load most recent candles
-    let (min_time, max_time) = db.get_time_range(ticker_id, timeframe)
+    let (min_time, max_time) = db
+        .get_time_range(ticker_id, timeframe)
         .expect("Failed to get time range");
 
     println!("Database time range: {} to {}", min_time, max_time);
 
-    let candles = db.load_candles(ticker_id, timeframe, min_time, max_time)
+    let candles = db
+        .load_candles(ticker_id, timeframe, min_time, max_time)
         .expect("Failed to load candles");
 
     println!("Loaded {} candles", candles.len());
@@ -80,7 +82,7 @@ fn setup(mut commands: Commands) {
     // Total chart area (leave room for axes labels)
     // Window is 1600x900, but we need margins for labels
     let total_area = Rect::from_center_size(
-        Vec2::new(-40.0, 10.0),  // Offset left and up slightly
+        Vec2::new(-40.0, 10.0),   // Offset left and up slightly
         Vec2::new(1400.0, 780.0), // Smaller than window to leave room for labels
     );
 
@@ -93,14 +95,14 @@ fn setup(mut commands: Commands) {
         Pane::new(
             PaneId::Price,
             PaneType::Price,
-            0.7, // 70% of chart height
+            0.7,             // 70% of chart height
             Rect::default(), // Will be calculated by calculate_pane_layouts
             visible_candle_count,
         ),
         Pane::new(
             PaneId::Volume,
             PaneType::Volume,
-            0.3, // 30% of chart height
+            0.3,             // 30% of chart height
             Rect::default(), // Will be calculated by calculate_pane_layouts
             visible_candle_count,
         ),
@@ -111,8 +113,8 @@ fn setup(mut commands: Commands) {
 
     // Calculate Moving Average indicators (before fitting bounds so we can include them)
     let indicators = vec![
-        MovingAverage::new_sma(&candles, 20, Color::srgb(1.0, 0.8, 0.0)),  // Yellow SMA-20
-        MovingAverage::new_sma(&candles, 50, Color::srgb(0.0, 1.0, 1.0)),  // Cyan SMA-50
+        MovingAverage::new_sma(&candles, 20, Color::srgb(1.0, 0.8, 0.0)), // Yellow SMA-20
+        MovingAverage::new_sma(&candles, 50, Color::srgb(0.0, 1.0, 1.0)), // Cyan SMA-50
         MovingAverage::new_sma(&candles, 200, Color::srgb(1.0, 0.0, 1.0)), // Magenta SMA-200
     ];
 
@@ -124,11 +126,12 @@ fn setup(mut commands: Commands) {
                     &candles,
                     &indicators,
                     visible_candle_start,
-                    visible_candle_count
+                    visible_candle_count,
                 );
             }
             PaneType::Volume => {
-                pane.space.fit_volume_bounds(&candles, visible_candle_start, visible_candle_count);
+                pane.space
+                    .fit_volume_bounds(&candles, visible_candle_start, visible_candle_count);
             }
             _ => {}
         }
@@ -192,21 +195,18 @@ struct ScreenshotCounter(u32);
 /// System to capture screenshots when F is pressed
 fn screenshot_on_keypress(
     input: Res<ButtonInput<KeyCode>>,
-    mut screenshot_manager: ResMut<ScreenshotManager>,
+    mut commands: Commands,
     mut counter: ResMut<ScreenshotCounter>,
-    primary_window: Query<Entity, With<Window>>,
 ) {
     if input.just_pressed(KeyCode::KeyF) {
         let filename = format!("screenshot-{:04}.png", counter.0);
         counter.0 += 1;
 
-        println!("📸 Taking screenshot: {}", filename);
+        println!("Taking screenshot: {}", filename);
 
-        if let Ok(window_entity) = primary_window.get_single() {
-            screenshot_manager
-                .save_screenshot_to_disk(window_entity, filename)
-                .unwrap_or_else(|e| eprintln!("Failed to take screenshot: {}", e));
-        }
+        commands
+            .spawn(Screenshot::primary_window())
+            .observe(save_to_disk(filename));
     }
 }
 
@@ -221,20 +221,18 @@ struct FpsText;
 /// Setup FPS counter UI in top-right corner
 fn setup_fps_counter(mut commands: Commands) {
     commands.spawn((
-        TextBundle::from_section(
-            "FPS: --",
-            TextStyle {
-                font_size: 20.0,
-                color: Color::srgb(0.0, 1.0, 0.0), // Green text
-                ..default()
-            },
-        )
-        .with_style(Style {
+        Text::new("FPS: --"),
+        TextFont {
+            font_size: 20.0,
+            ..default()
+        },
+        TextColor(Color::srgb(0.0, 1.0, 0.0)), // Green text
+        Node {
             position_type: PositionType::Absolute,
             top: Val::Px(10.0),
             right: Val::Px(10.0),
             ..default()
-        }),
+        },
         FpsText,
     ));
 }
@@ -247,7 +245,7 @@ fn update_fps_counter(
     for mut text in &mut query {
         if let Some(fps) = diagnostics.get(&FrameTimeDiagnosticsPlugin::FPS) {
             if let Some(value) = fps.smoothed() {
-                text.sections[0].value = format!("FPS: {:.0}", value);
+                **text = format!("FPS: {:.0}", value);
             }
         }
     }

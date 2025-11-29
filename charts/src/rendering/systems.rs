@@ -1,6 +1,7 @@
-use bevy::prelude::*;
-use chrono::{DateTime, Utc};
 use crate::types::*;
+use bevy::prelude::*;
+use bevy::window::CursorOptions;
+use chrono::{DateTime, Utc};
 
 // ============================================================================
 // RENDERING SYSTEMS
@@ -21,8 +22,7 @@ pub fn render_candlesticks(
     }
 
     // Find the Price pane
-    let price_pane = chart.panes.iter()
-        .find(|p| matches!(p.id, PaneId::Price));
+    let price_pane = chart.panes.iter().find(|p| matches!(p.id, PaneId::Price));
 
     if price_pane.is_none() {
         return;
@@ -42,20 +42,28 @@ pub fn render_candlesticks(
 
         // Calculate positions using ChartSpace::to_world() with shared X-axis params
         let wick_bottom = price_pane.space.to_world(
-            i, candle.low as f32,
-            chart.visible_candle_start, chart.visible_candle_count
+            i,
+            candle.low as f32,
+            chart.visible_candle_start,
+            chart.visible_candle_count,
         );
         let wick_top = price_pane.space.to_world(
-            i, candle.high as f32,
-            chart.visible_candle_start, chart.visible_candle_count
+            i,
+            candle.high as f32,
+            chart.visible_candle_start,
+            chart.visible_candle_count,
         );
         let body_open = price_pane.space.to_world(
-            i, candle.open as f32,
-            chart.visible_candle_start, chart.visible_candle_count
+            i,
+            candle.open as f32,
+            chart.visible_candle_start,
+            chart.visible_candle_count,
         );
         let body_close = price_pane.space.to_world(
-            i, candle.close as f32,
-            chart.visible_candle_start, chart.visible_candle_count
+            i,
+            candle.close as f32,
+            chart.visible_candle_start,
+            chart.visible_candle_count,
         );
 
         let wick_center = Vec2::new(
@@ -66,15 +74,12 @@ pub fn render_candlesticks(
 
         // Spawn wick entity (thin line, Z=0)
         commands.spawn((
-            SpriteBundle {
-                sprite: Sprite {
-                    color: Color::srgb(0.5, 0.5, 0.5),
-                    custom_size: Some(Vec2::new(1.0, wick_height)),
-                    ..default()
-                },
-                transform: Transform::from_translation(wick_center.extend(0.0)),
+            Sprite {
+                color: Color::srgb(0.5, 0.5, 0.5),
+                custom_size: Some(Vec2::new(1.0, wick_height)),
                 ..default()
             },
+            Transform::from_translation(wick_center.extend(0.0)),
             CandlestickWick { candle_index: i },
             PriceElement,
             PaneId::Price,
@@ -89,21 +94,18 @@ pub fn render_candlesticks(
         );
 
         let body_color = if candle.close >= candle.open {
-            Color::srgb(0.0, 0.8, 0.2)  // Green
+            Color::srgb(0.0, 0.8, 0.2) // Green
         } else {
-            Color::srgb(0.9, 0.2, 0.2)  // Red
+            Color::srgb(0.9, 0.2, 0.2) // Red
         };
 
         commands.spawn((
-            SpriteBundle {
-                sprite: Sprite {
-                    color: body_color,
-                    custom_size: Some(Vec2::new(body_width, body_height)),
-                    ..default()
-                },
-                transform: Transform::from_translation(body_center.extend(1.0)),
+            Sprite {
+                color: body_color,
+                custom_size: Some(Vec2::new(body_width, body_height)),
                 ..default()
             },
+            Transform::from_translation(body_center.extend(1.0)),
             CandlestickBody { candle_index: i },
             PriceElement,
             PaneId::Price,
@@ -133,8 +135,7 @@ pub fn render_volume_bars(
     }
 
     // Find the Volume pane
-    let volume_pane = chart.panes.iter()
-        .find(|p| matches!(p.id, PaneId::Volume));
+    let volume_pane = chart.panes.iter().find(|p| matches!(p.id, PaneId::Volume));
 
     if volume_pane.is_none() {
         return;
@@ -154,12 +155,16 @@ pub fn render_volume_bars(
 
         // Calculate bottom (0) and top (volume) positions
         let bar_bottom = volume_pane.space.to_world(
-            i, 0.0,
-            chart.visible_candle_start, chart.visible_candle_count
+            i,
+            0.0,
+            chart.visible_candle_start,
+            chart.visible_candle_count,
         );
         let bar_top = volume_pane.space.to_world(
-            i, candle.volume as f32,
-            chart.visible_candle_start, chart.visible_candle_count
+            i,
+            candle.volume as f32,
+            chart.visible_candle_start,
+            chart.visible_candle_count,
         );
 
         let bar_center = Vec2::new(
@@ -171,21 +176,18 @@ pub fn render_volume_bars(
 
         // Color based on candle direction
         let bar_color = if candle.close >= candle.open {
-            Color::srgba(0.0, 0.8, 0.2, 0.6)  // Green with transparency
+            Color::srgba(0.0, 0.8, 0.2, 0.6) // Green with transparency
         } else {
-            Color::srgba(0.9, 0.2, 0.2, 0.6)  // Red with transparency
+            Color::srgba(0.9, 0.2, 0.2, 0.6) // Red with transparency
         };
 
         commands.spawn((
-            SpriteBundle {
-                sprite: Sprite {
-                    color: bar_color,
-                    custom_size: Some(Vec2::new(bar_width, bar_height)),
-                    ..default()
-                },
-                transform: Transform::from_translation(bar_center.extend(0.0)),
+            Sprite {
+                color: bar_color,
+                custom_size: Some(Vec2::new(bar_width, bar_height)),
                 ..default()
             },
+            Transform::from_translation(bar_center.extend(0.0)),
             VolumeBar { candle_index: i },
             VolumeElement,
             PaneId::Volume,
@@ -201,10 +203,7 @@ pub fn render_volume_bars(
 }
 
 /// Initialize persistent crosshair entities (called once at startup from setup)
-pub fn init_crosshair(
-    commands: &mut Commands,
-    chart: &Chart,
-) {
+pub fn init_crosshair(commands: &mut Commands, chart: &Chart) {
     let mut horizontal_lines = Vec::new();
     let mut price_labels = Vec::new();
 
@@ -231,19 +230,18 @@ pub fn init_crosshair(
 
     for i in 0..num_segments {
         let segment_y = chart_bottom + (i as f32 * PATTERN_LENGTH) + (DASH_LENGTH / 2.0);
-        let segment_id = commands.spawn((
-            SpriteBundle {
-                sprite: Sprite {
+        let segment_id = commands
+            .spawn((
+                Sprite {
                     color: Color::srgba(1.0, 1.0, 1.0, 0.6),
                     custom_size: Some(Vec2::new(1.0, DASH_LENGTH)),
                     ..default()
                 },
-                transform: Transform::from_translation(Vec3::new(0.0, segment_y, 3.0)),
-                visibility: Visibility::Hidden,
-                ..default()
-            },
-            CrosshairElement,
-        )).id();
+                Transform::from_translation(Vec3::new(0.0, segment_y, 3.0)),
+                Visibility::Hidden,
+                CrosshairElement,
+            ))
+            .id();
         vertical_line_segments.push(segment_id);
     }
 
@@ -258,85 +256,75 @@ pub fn init_crosshair(
 
         for i in 0..num_h_segments {
             let segment_x = viewport.min.x + (i as f32 * PATTERN_LENGTH) + (DASH_LENGTH / 2.0);
-            let segment_id = commands.spawn((
-                SpriteBundle {
-                    sprite: Sprite {
+            let segment_id = commands
+                .spawn((
+                    Sprite {
                         color: Color::srgba(1.0, 1.0, 1.0, 0.6),
                         custom_size: Some(Vec2::new(DASH_LENGTH, 1.0)),
                         ..default()
                     },
-                    transform: Transform::from_translation(Vec3::new(segment_x, 0.0, 3.0)),
-                    visibility: Visibility::Hidden,
-                    ..default()
-                },
-                CrosshairElement,
-            )).id();
+                    Transform::from_translation(Vec3::new(segment_x, 0.0, 3.0)),
+                    Visibility::Hidden,
+                    CrosshairElement,
+                ))
+                .id();
             h_segments.push(segment_id);
         }
         horizontal_lines.push((pane.id, h_segments));
 
         // Price label for this pane
-        let label = commands.spawn((
-            Text2dBundle {
-                text: Text::from_section(
-                    "",
-                    TextStyle {
-                        font_size: 14.0,
-                        color: Color::srgb(1.0, 1.0, 0.0),
-                        ..default()
-                    },
-                ),
-                transform: Transform::from_translation(Vec3::new(chart_right + 50.0, 0.0, 4.0)),
-                text_anchor: bevy::sprite::Anchor::CenterLeft,
-                visibility: Visibility::Hidden,
-                ..default()
-            },
-            CrosshairElement,
-        )).id();
+        let label = commands
+            .spawn((
+                Text2d::new(""),
+                TextFont {
+                    font_size: 14.0,
+                    ..default()
+                },
+                TextColor(Color::srgb(1.0, 1.0, 0.0)),
+                Transform::from_translation(Vec3::new(chart_right + 50.0, 0.0, 4.0)),
+                bevy::sprite::Anchor::CENTER_LEFT,
+                Visibility::Hidden,
+                CrosshairElement,
+            ))
+            .id();
         price_labels.push((pane.id, label));
     }
 
     // Spawn time label
-    let time_label = commands.spawn((
-        Text2dBundle {
-            text: Text::from_section(
-                "",
-                TextStyle {
-                    font_size: 14.0,
-                    color: Color::srgb(1.0, 1.0, 0.0),
-                    ..default()
-                },
-            ),
-            transform: Transform::from_translation(Vec3::new(0.0, chart_bottom - 40.0, 4.0)),
-            text_anchor: bevy::sprite::Anchor::Center,
-            visibility: Visibility::Hidden,
-            ..default()
-        },
-        CrosshairElement,
-    )).id();
+    let time_label = commands
+        .spawn((
+            Text2d::new(""),
+            TextFont {
+                font_size: 14.0,
+                ..default()
+            },
+            TextColor(Color::srgb(1.0, 1.0, 0.0)),
+            Transform::from_translation(Vec3::new(0.0, chart_bottom - 40.0, 4.0)),
+            bevy::sprite::Anchor::CENTER,
+            Visibility::Hidden,
+            CrosshairElement,
+        ))
+        .id();
 
     // Spawn OHLCV info box
-    let ohlcv_box = commands.spawn((
-        Text2dBundle {
-            text: Text::from_section(
-                "",
-                TextStyle {
-                    font_size: 16.0,
-                    color: Color::srgb(1.0, 1.0, 1.0),
-                    ..default()
-                },
-            ),
-            transform: Transform::from_translation(Vec3::new(
+    let ohlcv_box = commands
+        .spawn((
+            Text2d::new(""),
+            TextFont {
+                font_size: 16.0,
+                ..default()
+            },
+            TextColor(Color::srgb(1.0, 1.0, 1.0)),
+            Transform::from_translation(Vec3::new(
                 first_pane.space.viewport.min.x + 100.0,
                 first_pane.space.viewport.max.y - 40.0,
-                4.0
+                4.0,
             )),
-            text_anchor: bevy::sprite::Anchor::TopLeft,
-            visibility: Visibility::Hidden,
-            ..default()
-        },
-        CrosshairElement,
-    )).id();
+            bevy::sprite::Anchor::TOP_LEFT,
+            Visibility::Hidden,
+            CrosshairElement,
+        ))
+        .id();
 
     // Insert the resource
     commands.insert_resource(CrosshairEntities {
@@ -384,8 +372,8 @@ pub fn render_grid_and_axes(
 
         for i in 0..=grid.y_tick_count {
             let value_percent = i as f32 / grid.y_tick_count as f32;
-            let value = pane.space.visible_price_min +
-                value_percent * (pane.space.visible_price_max - pane.space.visible_price_min);
+            let value = pane.space.visible_price_min
+                + value_percent * (pane.space.visible_price_max - pane.space.visible_price_min);
 
             let y = viewport.min.y + value_percent * viewport.height();
 
@@ -394,15 +382,12 @@ pub fn render_grid_and_axes(
             let line_width = chart_right - chart_left;
 
             commands.spawn((
-                SpriteBundle {
-                    sprite: Sprite {
-                        color: grid.grid_color,
-                        custom_size: Some(Vec2::new(line_width, 1.0)),
-                        ..default()
-                    },
-                    transform: Transform::from_translation(line_center.extend(-1.0)),
+                Sprite {
+                    color: grid.grid_color,
+                    custom_size: Some(Vec2::new(line_width, 1.0)),
                     ..default()
                 },
+                Transform::from_translation(line_center.extend(-1.0)),
                 GridElement,
             ));
 
@@ -412,19 +397,14 @@ pub fn render_grid_and_axes(
                 let label_text = format!("{:.2}", value);
 
                 commands.spawn((
-                    Text2dBundle {
-                        text: Text::from_section(
-                            label_text,
-                            TextStyle {
-                                font_size: axes.label_size,
-                                color: axes.label_color,
-                                ..default()
-                            },
-                        ),
-                        transform: Transform::from_translation(Vec3::new(label_x, y, 2.0)),
-                        text_anchor: bevy::sprite::Anchor::CenterLeft,
+                    Text2d::new(label_text),
+                    TextFont {
+                        font_size: axes.label_size,
                         ..default()
                     },
+                    TextColor(axes.label_color),
+                    Transform::from_translation(Vec3::new(label_x, y, 2.0)),
+                    bevy::sprite::Anchor::CENTER_LEFT,
                     GridElement,
                 ));
             }
@@ -439,73 +419,45 @@ pub fn render_grid_and_axes(
 
         // Top border
         commands.spawn((
-            SpriteBundle {
-                sprite: Sprite {
-                    color: border_color,
-                    custom_size: Some(Vec2::new(viewport.width(), border_thickness)),
-                    ..default()
-                },
-                transform: Transform::from_translation(Vec3::new(
-                    viewport.center().x,
-                    viewport.max.y,
-                    0.4,
-                )),
+            Sprite {
+                color: border_color,
+                custom_size: Some(Vec2::new(viewport.width(), border_thickness)),
                 ..default()
             },
+            Transform::from_translation(Vec3::new(viewport.center().x, viewport.max.y, 0.4)),
             GridElement,
         ));
 
         // Bottom border
         commands.spawn((
-            SpriteBundle {
-                sprite: Sprite {
-                    color: border_color,
-                    custom_size: Some(Vec2::new(viewport.width(), border_thickness)),
-                    ..default()
-                },
-                transform: Transform::from_translation(Vec3::new(
-                    viewport.center().x,
-                    viewport.min.y,
-                    0.4,
-                )),
+            Sprite {
+                color: border_color,
+                custom_size: Some(Vec2::new(viewport.width(), border_thickness)),
                 ..default()
             },
+            Transform::from_translation(Vec3::new(viewport.center().x, viewport.min.y, 0.4)),
             GridElement,
         ));
 
         // Left border
         commands.spawn((
-            SpriteBundle {
-                sprite: Sprite {
-                    color: border_color,
-                    custom_size: Some(Vec2::new(border_thickness, viewport.height())),
-                    ..default()
-                },
-                transform: Transform::from_translation(Vec3::new(
-                    viewport.min.x,
-                    viewport.center().y,
-                    0.4,
-                )),
+            Sprite {
+                color: border_color,
+                custom_size: Some(Vec2::new(border_thickness, viewport.height())),
                 ..default()
             },
+            Transform::from_translation(Vec3::new(viewport.min.x, viewport.center().y, 0.4)),
             GridElement,
         ));
 
         // Right border
         commands.spawn((
-            SpriteBundle {
-                sprite: Sprite {
-                    color: border_color,
-                    custom_size: Some(Vec2::new(border_thickness, viewport.height())),
-                    ..default()
-                },
-                transform: Transform::from_translation(Vec3::new(
-                    viewport.max.x,
-                    viewport.center().y,
-                    0.4,
-                )),
+            Sprite {
+                color: border_color,
+                custom_size: Some(Vec2::new(border_thickness, viewport.height())),
                 ..default()
             },
+            Transform::from_translation(Vec3::new(viewport.max.x, viewport.center().y, 0.4)),
             GridElement,
         ));
     }
@@ -528,15 +480,12 @@ pub fn render_grid_and_axes(
             let line_y = gap_center_y + offset;
 
             commands.spawn((
-                SpriteBundle {
-                    sprite: Sprite {
-                        color: grip_color,
-                        custom_size: Some(Vec2::new(grip_width, line_height)),
-                        ..default()
-                    },
-                    transform: Transform::from_translation(Vec3::new(gap_center_x, line_y, 0.6)),
+                Sprite {
+                    color: grip_color,
+                    custom_size: Some(Vec2::new(grip_width, line_height)),
                     ..default()
                 },
+                Transform::from_translation(Vec3::new(gap_center_x, line_y, 0.6)),
                 GridElement,
             ));
         }
@@ -548,8 +497,8 @@ pub fn render_grid_and_axes(
 
         for i in 0..=grid.x_tick_count {
             let candle_percent = i as f32 / grid.x_tick_count as f32;
-            let candle_index = chart.visible_candle_start +
-                (candle_percent * chart.visible_candle_count as f32) as usize;
+            let candle_index = chart.visible_candle_start
+                + (candle_percent * chart.visible_candle_count as f32) as usize;
 
             if candle_index >= chart.candles.len() {
                 continue;
@@ -562,15 +511,12 @@ pub fn render_grid_and_axes(
             let line_height = viewport.height();
 
             commands.spawn((
-                SpriteBundle {
-                    sprite: Sprite {
-                        color: grid.grid_color,
-                        custom_size: Some(Vec2::new(1.0, line_height)),
-                        ..default()
-                    },
-                    transform: Transform::from_translation(line_center.extend(-1.0)),
+                Sprite {
+                    color: grid.grid_color,
+                    custom_size: Some(Vec2::new(1.0, line_height)),
                     ..default()
                 },
+                Transform::from_translation(line_center.extend(-1.0)),
                 GridElement,
             ));
         }
@@ -580,8 +526,8 @@ pub fn render_grid_and_axes(
     if axes.show_x_labels {
         for i in 0..=grid.x_tick_count {
             let candle_percent = i as f32 / grid.x_tick_count as f32;
-            let candle_index = chart.visible_candle_start +
-                (candle_percent * chart.visible_candle_count as f32) as usize;
+            let candle_index = chart.visible_candle_start
+                + (candle_percent * chart.visible_candle_count as f32) as usize;
 
             if candle_index >= chart.candles.len() {
                 continue;
@@ -592,24 +538,19 @@ pub fn render_grid_and_axes(
             let label_y = chart_bottom - 40.0;
 
             // Format timestamp using chrono
-            let datetime = DateTime::<Utc>::from_timestamp(candle.time / 1000, 0)
-                .unwrap_or_default();
+            let datetime =
+                DateTime::<Utc>::from_timestamp(candle.time / 1000, 0).unwrap_or_default();
             let label_text = datetime.format("%m/%d %H:%M").to_string();
 
             commands.spawn((
-                Text2dBundle {
-                    text: Text::from_section(
-                        label_text,
-                        TextStyle {
-                            font_size: axes.label_size,
-                            color: axes.label_color,
-                            ..default()
-                        },
-                    ),
-                    transform: Transform::from_translation(Vec3::new(x, label_y, 2.0)),
-                    text_anchor: bevy::sprite::Anchor::Center,
+                Text2d::new(label_text),
+                TextFont {
+                    font_size: axes.label_size,
                     ..default()
                 },
+                TextColor(axes.label_color),
+                Transform::from_translation(Vec3::new(x, label_y, 2.0)),
+                bevy::sprite::Anchor::CENTER,
                 GridElement,
             ));
         }
@@ -623,8 +564,8 @@ pub fn update_crosshair(
     mut interaction: ResMut<InteractionState>,
     mut transforms: Query<&mut Transform>,
     mut visibilities: Query<&mut Visibility>,
-    mut texts: Query<&mut Text>,
-    mut windows: Query<&mut Window>,
+    mut texts: Query<&mut Text2d>,
+    mut cursor_options: Query<&mut CursorOptions>,
 ) {
     if !crosshair.enabled || chart.panes.is_empty() {
         // Hide all crosshair elements and show cursor
@@ -653,8 +594,8 @@ pub fn update_crosshair(
         }
 
         // Show cursor when crosshair disabled
-        for mut window in windows.iter_mut() {
-            window.cursor.visible = true;
+        for mut cursor in cursor_options.iter_mut() {
+            cursor.visible = true;
         }
         return;
     }
@@ -667,9 +608,10 @@ pub fn update_crosshair(
     let chart_right = first_pane.space.viewport.max.x;
 
     // Check if mouse is within any pane
-    let mouse_in_chart = chart.panes.iter().any(|pane| {
-        pane.space.viewport.contains(interaction.mouse_pos)
-    });
+    let mouse_in_chart = chart
+        .panes
+        .iter()
+        .any(|pane| pane.space.viewport.contains(interaction.mouse_pos));
 
     // Show cursor if: outside chart, dragging, or resizing
     // Hide cursor only when: in chart AND not interacting
@@ -678,8 +620,8 @@ pub fn update_crosshair(
         && interaction.hover_resize_gap.is_none()
         && interaction.resizing_gap.is_none();
 
-    for mut window in windows.iter_mut() {
-        window.cursor.visible = !should_hide_cursor;
+    for mut cursor in cursor_options.iter_mut() {
+        cursor.visible = !should_hide_cursor;
     }
 
     if !mouse_in_chart {
@@ -728,10 +670,14 @@ pub fn update_crosshair(
         let viewport = &pane.space.viewport;
 
         // Find entities for this pane
-        let h_line_segments = crosshair_entities.horizontal_lines.iter()
+        let h_line_segments = crosshair_entities
+            .horizontal_lines
+            .iter()
             .find(|(id, _)| *id == pane.id)
             .map(|(_, segments)| segments);
-        let label_entity = crosshair_entities.price_labels.iter()
+        let label_entity = crosshair_entities
+            .price_labels
+            .iter()
             .find(|(id, _)| *id == pane.id)
             .map(|(_, e)| *e);
 
@@ -755,11 +701,11 @@ pub fn update_crosshair(
                     let (_, value_at_cursor) = pane.space.from_world(
                         interaction.mouse_pos,
                         chart.visible_candle_start,
-                        chart.visible_candle_count
+                        chart.visible_candle_count,
                     );
 
                     if let Ok(mut text) = texts.get_mut(entity) {
-                        text.sections[0].value = format!("{:.2}", value_at_cursor);
+                        **text = format!("{:.2}", value_at_cursor);
                     }
                     if let Ok(mut transform) = transforms.get_mut(entity) {
                         transform.translation.y = mouse_y;
@@ -792,7 +738,11 @@ pub fn update_crosshair(
 
     // ========== FIND CANDLE AT CURSOR ==========
     let (candle_index, _) = if let Some(pane) = chart.panes.first() {
-        pane.space.from_world(interaction.mouse_pos, chart.visible_candle_start, chart.visible_candle_count)
+        pane.space.from_world(
+            interaction.mouse_pos,
+            chart.visible_candle_start,
+            chart.visible_candle_count,
+        )
     } else {
         return;
     };
@@ -818,12 +768,12 @@ pub fn update_crosshair(
 
         // ========== UPDATE TIME LABEL (only when candle changes) ==========
         if crosshair.show_time_label {
-            let datetime = DateTime::<Utc>::from_timestamp(candle.time / 1000, 0)
-                .unwrap_or_default();
+            let datetime =
+                DateTime::<Utc>::from_timestamp(candle.time / 1000, 0).unwrap_or_default();
             let label_text = datetime.format("%m/%d %H:%M").to_string();
 
             if let Ok(mut text) = texts.get_mut(crosshair_entities.time_label) {
-                text.sections[0].value = label_text;
+                **text = label_text;
             }
         }
 
@@ -835,7 +785,7 @@ pub fn update_crosshair(
             );
 
             if let Ok(mut text) = texts.get_mut(crosshair_entities.ohlcv_box) {
-                text.sections[0].value = info_text;
+                **text = info_text;
             }
         }
     }
@@ -867,13 +817,9 @@ pub fn update_crosshair(
     }
 }
 
-pub fn render_moving_averages(
-    mut gizmos: Gizmos,
-    chart: Res<Chart>,
-) {
+pub fn render_moving_averages(mut gizmos: Gizmos, chart: Res<Chart>) {
     // Find the Price pane (indicators overlay on price)
-    let price_pane = chart.panes.iter()
-        .find(|p| matches!(p.id, PaneId::Price));
+    let price_pane = chart.panes.iter().find(|p| matches!(p.id, PaneId::Price));
 
     if price_pane.is_none() {
         return;
@@ -897,7 +843,9 @@ pub fn render_moving_averages(
         // Draw continuous line connecting MA points
         for i in start..(end - 1) {
             // Need both current and next values to draw a line segment
-            if let (Some(curr_value), Some(next_value)) = (ma.values[i], ma.values.get(i + 1).and_then(|v| *v)) {
+            if let (Some(curr_value), Some(next_value)) =
+                (ma.values[i], ma.values.get(i + 1).and_then(|v| *v))
+            {
                 // Convert to world coordinates
                 let curr_pos = price_pane.space.to_world(
                     i,

@@ -5,7 +5,8 @@
 //! to meet GPU memory alignment requirements.
 
 use bytemuck::{Pod, Zeroable};
-use bevy::render::render_resource::{VertexBufferLayout, VertexStepMode, VertexAttribute, VertexFormat};
+use bevy::mesh::VertexBufferLayout;
+use bevy::render::render_resource::{VertexStepMode, VertexAttribute, VertexFormat};
 
 /// GPU-compatible instance data for a single candlestick
 ///

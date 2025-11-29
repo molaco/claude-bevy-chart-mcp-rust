@@ -15,29 +15,29 @@
 //! - `CandlePipeline`: Cached render pipeline and bind group layout
 //! - `InstancingEnabled`: Toggle for enabling/disabling GPU instancing
 
-use bevy::prelude::*;
-use bevy::render::{
-    render_resource::{
-        Buffer, BindGroup, BindGroupLayout, CachedRenderPipelineId,
-        BindGroupLayoutEntry, BindingType, BufferBindingType,
-        ShaderStages, PipelineCache, RenderPipelineDescriptor,
-        VertexState, FragmentState, PrimitiveState, PrimitiveTopology, FrontFace,
-        PolygonMode, ColorTargetState, ColorWrites, BlendState, TextureFormat,
-        MultisampleState,
-        RenderPassDescriptor, RenderPassColorAttachment, Operations, LoadOp, StoreOp,
-        BufferInitDescriptor, BufferUsages, BindGroupEntry,
-    },
-    RenderApp, ExtractSchedule, Extract, Render, RenderSet,
-    render_graph::{RenderLabel, NodeRunError, RenderGraphContext, ViewNode, ViewNodeRunner, RenderGraphApp},
-    renderer::{RenderDevice, RenderContext, RenderQueue},
-    view::ViewTarget,
-};
+use super::instancing::{CandleInstance, ViewUniform};
+use crate::types::{Chart, ChartColors, PaneType};
 use bevy::asset::AssetServer;
 use bevy::core_pipeline::core_2d::graph::{Core2d, Node2d};
 use bevy::ecs::query::QueryItem;
+use bevy::prelude::*;
+use bevy::render::{
+    render_graph::{
+        NodeRunError, RenderGraphContext, RenderGraphExt, RenderLabel, ViewNode, ViewNodeRunner,
+    },
+    render_resource::{
+        BindGroup, BindGroupEntry, BindGroupLayout, BindGroupLayoutEntry, BindingType, BlendState,
+        Buffer, BufferBindingType, BufferInitDescriptor, BufferUsages, CachedRenderPipelineId,
+        ColorTargetState, ColorWrites, FragmentState, FrontFace, LoadOp, MultisampleState,
+        Operations, PipelineCache, PolygonMode, PrimitiveState, PrimitiveTopology,
+        RenderPassColorAttachment, RenderPassDescriptor, RenderPipelineDescriptor, ShaderStages,
+        StoreOp, TextureFormat, VertexState,
+    },
+    renderer::{RenderContext, RenderDevice, RenderQueue},
+    view::ViewTarget,
+    Extract, ExtractSchedule, Render, RenderApp, RenderSet,
+};
 use bevy::window::Window;
-use super::instancing::{CandleInstance, ViewUniform};
-use crate::types::{Chart, ChartColors, PaneType};
 
 /// Resource containing extracted candlestick instance data
 ///
@@ -71,7 +71,6 @@ pub struct ExtractedCandlesInstanced {
     pub viewport_height: f32,
 
     // State tracking for change detection
-
     /// Last rendered time range start (for detecting zoom/pan)
     pub last_time_start: i64,
 
@@ -88,7 +87,6 @@ pub struct ExtractedCandlesInstanced {
     pub last_viewport_height: f32,
 
     // Theme colors (linear RGBA)
-
     /// Bullish candle color in linear RGBA (typically green)
     pub bull_color: [f32; 4],
 
@@ -178,7 +176,7 @@ pub struct InstancingEnabled(pub bool);
 
 impl Default for InstancingEnabled {
     fn default() -> Self {
-        Self(true)  // Enabled by default
+        Self(true) // Enabled by default
     }
 }
 
@@ -216,7 +214,7 @@ impl ViewNode for CandlestickNode {
         &self,
         _graph: &mut RenderGraphContext,
         render_context: &mut RenderContext<'w>,
-        view_target: QueryItem<'w, Self::ViewQuery>,
+        view_target: QueryItem<'w, 'w, Self::ViewQuery>,
         world: &'w World,
     ) -> Result<(), NodeRunError> {
         // 1. Get render resources
@@ -240,29 +238,32 @@ impl ViewNode for CandlestickNode {
         };
 
         let pipeline_cache = world.resource::<PipelineCache>();
-        let Some(pipeline) = pipeline_cache.get_render_pipeline(pipeline_resource.pipeline_id) else {
+        let Some(pipeline) = pipeline_cache.get_render_pipeline(pipeline_resource.pipeline_id)
+        else {
             return Ok(()); // Pipeline still compiling
         };
 
         // 3. Create render pass
         let color_attachment = view_target.get_color_attachment();
 
-        let mut render_pass = render_context
-            .command_encoder()
-            .begin_render_pass(&RenderPassDescriptor {
-                label: Some("candlestick_instanced_pass"),
-                color_attachments: &[Some(RenderPassColorAttachment {
-                    view: color_attachment.view,
-                    resolve_target: color_attachment.resolve_target,
-                    ops: Operations {
-                        load: LoadOp::Load,  // Preserve existing content
-                        store: StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-            });
+        let mut render_pass =
+            render_context
+                .command_encoder()
+                .begin_render_pass(&RenderPassDescriptor {
+                    label: Some("candlestick_instanced_pass"),
+                    color_attachments: &[Some(RenderPassColorAttachment {
+                        view: color_attachment.view,
+                        resolve_target: color_attachment.resolve_target,
+                        ops: Operations {
+                            load: LoadOp::Load, // Preserve existing content
+                            store: StoreOp::Store,
+                        },
+                        depth_slice: None,
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                });
 
         // 4. Set pipeline and bindings
         render_pass.set_pipeline(pipeline);
@@ -274,10 +275,14 @@ impl ViewNode for CandlestickNode {
         render_pass.draw(0..VERTICES_PER_CANDLE, 0..render_data.instance_count);
 
         // Debug: print once
-        static DRAW_LOGGED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        static DRAW_LOGGED: std::sync::atomic::AtomicBool =
+            std::sync::atomic::AtomicBool::new(false);
         if !DRAW_LOGGED.swap(true, std::sync::atomic::Ordering::Relaxed) {
-            println!("Render Node: Drawing {} instances ({} vertices)",
-                render_data.instance_count, VERTICES_PER_CANDLE * render_data.instance_count);
+            println!(
+                "Render Node: Drawing {} instances ({} vertices)",
+                render_data.instance_count,
+                VERTICES_PER_CANDLE * render_data.instance_count
+            );
         }
 
         Ok(())
@@ -348,7 +353,10 @@ fn prepare_candles_instanced(
     // Debug: always print once to confirm system runs
     static LOGGED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
     if !LOGGED.load(std::sync::atomic::Ordering::Relaxed) {
-        println!("Prepare Debug: system entered, pipeline exists: {}", pipeline.is_some());
+        println!(
+            "Prepare Debug: system entered, pipeline exists: {}",
+            pipeline.is_some()
+        );
     }
 
     let Some(pipeline) = pipeline else {
@@ -365,8 +373,11 @@ fn prepare_candles_instanced(
     }
 
     if !LOGGED.load(std::sync::atomic::Ordering::Relaxed) {
-        println!("Prepare Debug: {} instances, buffer_capacity={}",
-            extracted.instances.len(), render_data.buffer_capacity);
+        println!(
+            "Prepare Debug: {} instances, buffer_capacity={}",
+            extracted.instances.len(),
+            render_data.buffer_capacity
+        );
     }
 
     // A. Create/update instance buffer
@@ -380,7 +391,7 @@ fn prepare_candles_instanced(
                 label: Some("candlestick_instance_buffer"),
                 contents: instance_data,
                 usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
-            }
+            },
         ));
         render_data.buffer_capacity = required_size;
     } else if let Some(buffer) = &render_data.instance_buffer {
@@ -391,7 +402,12 @@ fn prepare_candles_instanced(
     // B. Build view uniform
     let view_uniform = ViewUniform {
         view_proj: build_orthographic_matrix(extracted.viewport_width, extracted.viewport_height),
-        viewport: [0.0, 0.0, extracted.viewport_width, extracted.viewport_height],
+        viewport: [
+            0.0,
+            0.0,
+            extracted.viewport_width,
+            extracted.viewport_height,
+        ],
         bull_color: extracted.bull_color,
         bear_color: extracted.bear_color,
         wick_color: extracted.wick_color,
@@ -406,7 +422,7 @@ fn prepare_candles_instanced(
                 label: Some("candlestick_view_uniform_buffer"),
                 contents: uniform_data,
                 usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
-            }
+            },
         ));
     } else if let Some(buffer) = &render_data.view_uniform_buffer {
         render_queue.write_buffer(buffer, 0, uniform_data);
@@ -429,10 +445,12 @@ fn prepare_candles_instanced(
 
     // Debug: confirm buffer creation
     if !LOGGED.swap(true, std::sync::atomic::Ordering::Relaxed) {
-        println!("Prepare Complete: instance_count={}, has_buffer={}, has_bind_group={}",
+        println!(
+            "Prepare Complete: instance_count={}, has_buffer={}, has_bind_group={}",
             render_data.instance_count,
             render_data.instance_buffer.is_some(),
-            render_data.bind_group.is_some());
+            render_data.bind_group.is_some()
+        );
     }
 }
 
@@ -489,7 +507,7 @@ fn extract_candles_instanced(
     }
 
     // Get window size for viewport tracking
-    let (viewport_width, viewport_height) = if let Ok(window) = windows.get_single() {
+    let (viewport_width, viewport_height) = if let Ok(window) = windows.single() {
         (window.width(), window.height())
     } else {
         (extracted.viewport_width, extracted.viewport_height)
@@ -529,13 +547,13 @@ fn extract_candles_instanced(
     let state_unchanged = extracted.last_time_start == chart.candles[start].time
         && extracted.last_time_end == chart.candles[end - 1].time
         && extracted.last_candle_count == visible_candles.len()
-        && (extracted.last_viewport_width - viewport_width).abs() < 1.0
-        && (extracted.last_viewport_height - viewport_height).abs() < 1.0
+        && (extracted.last_viewport_width - viewport_width).abs() < 1.0_f32
+        && (extracted.last_viewport_height - viewport_height).abs() < 1.0_f32
         && !extracted.instances.is_empty();
 
     if state_unchanged {
         // Nothing changed, keep existing data
-        extracted.needs_redraw = true;  // Still need to render
+        extracted.needs_redraw = true; // Still need to render
         return;
     }
 
@@ -549,7 +567,7 @@ fn extract_candles_instanced(
     // Calculate candle width and body width (use visible_candle_count like old system)
     let visible_count = chart.visible_candle_count;
     let candle_width = viewport.width() / visible_count.max(1) as f32;
-    let body_width = candle_width * 0.7;  // 70% for body (same as old system)
+    let body_width = candle_width * 0.7; // 70% for body (same as old system)
 
     // Coordinate transformation functions (match ChartSpace::to_world exactly)
     let price_to_y = |price: f64| -> f32 {
@@ -582,7 +600,11 @@ fn extract_candles_instanced(
         let close_y = price_to_y(candle.close);
         let is_bullish = candle.close >= candle.open;
 
-        if is_bullish { bull_count += 1; } else { bear_count += 1; }
+        if is_bullish {
+            bull_count += 1;
+        } else {
+            bear_count += 1;
+        }
 
         extracted.instances.push(CandleInstance::with_bullish(
             x_pos, body_width, open_y, high_y, low_y, close_y, is_bullish,
@@ -592,15 +614,30 @@ fn extract_candles_instanced(
     // Debug: print first frame only
     if extracted.last_candle_count == 0 {
         println!("GPU Instancing Debug:");
-        println!("  Candles: {} (bull: {}, bear: {})", visible_candles.len(), bull_count, bear_count);
+        println!(
+            "  Candles: {} (bull: {}, bear: {})",
+            visible_candles.len(),
+            bull_count,
+            bear_count
+        );
         println!("  Viewport: {:?}", viewport);
         println!("  Body width: {}", body_width);
         if let Some(first) = extracted.instances.first() {
-            println!("  First instance: x={}, w={}, o={}, h={}, l={}, c={}, bull={}",
-                first.x_position, first.width, first.open, first.high, first.low, first.close, first.is_bullish);
+            println!(
+                "  First instance: x={}, w={}, o={}, h={}, l={}, c={}, bull={}",
+                first.x_position,
+                first.width,
+                first.open,
+                first.high,
+                first.low,
+                first.close,
+                first.is_bullish
+            );
         }
-        println!("  Colors: bull={:?}, bear={:?}, wick={:?}",
-            extracted.bull_color, extracted.bear_color, extracted.wick_color);
+        println!(
+            "  Colors: bull={:?}, bear={:?}, wick={:?}",
+            extracted.bull_color, extracted.bear_color, extracted.wick_color
+        );
     }
 
     // Update tracking state
@@ -610,7 +647,7 @@ fn extract_candles_instanced(
     extracted.last_viewport_width = viewport_width;
     extracted.last_viewport_height = viewport_height;
     extracted.needs_redraw = true;
-    extracted.instances_changed = true;  // Signal that GPU buffer needs update
+    extracted.instances_changed = true; // Signal that GPU buffer needs update
 }
 
 // ============================================================================
@@ -724,13 +761,13 @@ impl Plugin for CandlestickInstancedPlugin {
             vertex: VertexState {
                 shader: shader.clone(),
                 shader_defs: vec![],
-                entry_point: "vertex".into(),
+                entry_point: Some("vertex".into()),
                 buffers: vec![instance_layout],
             },
             fragment: Some(FragmentState {
                 shader,
                 shader_defs: vec![],
-                entry_point: "fragment".into(),
+                entry_point: Some("fragment".into()),
                 targets: vec![Some(ColorTargetState {
                     format: TextureFormat::Rgba8UnormSrgb,
                     blend: Some(BlendState::ALPHA_BLENDING),
@@ -748,10 +785,11 @@ impl Plugin for CandlestickInstancedPlugin {
             },
             depth_stencil: None,
             multisample: MultisampleState {
-                count: 4,  // Match the MSAA sample count used by Bevy's default render pass
+                count: 4, // Match the MSAA sample count used by Bevy's default render pass
                 mask: !0,
                 alpha_to_coverage_enabled: false,
             },
+            zero_initialize_workgroup_memory: true,
             push_constant_ranges: vec![],
         });
 
