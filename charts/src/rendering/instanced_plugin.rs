@@ -273,6 +273,13 @@ impl ViewNode for CandlestickNode {
         const VERTICES_PER_CANDLE: u32 = 12;
         render_pass.draw(0..VERTICES_PER_CANDLE, 0..render_data.instance_count);
 
+        // Debug: print once
+        static DRAW_LOGGED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if !DRAW_LOGGED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            println!("Render Node: Drawing {} instances ({} vertices)",
+                render_data.instance_count, VERTICES_PER_CANDLE * render_data.instance_count);
+        }
+
         Ok(())
     }
 }
@@ -300,8 +307,8 @@ fn build_orthographic_matrix(width: f32, height: f32) -> [[f32; 4]; 4] {
     let right = half_width;
     let bottom = -half_height;
     let top = half_height;
-    let near = -1000.0;  // Extended range for z-depth
-    let far = 1000.0;
+    let near = -1.0;
+    let far = 1.0;
 
     [
         [2.0 / (right - left), 0.0, 0.0, 0.0],
@@ -336,12 +343,30 @@ fn prepare_candles_instanced(
     extracted: Res<ExtractedCandlesInstanced>,
     render_device: Res<RenderDevice>,
     render_queue: Res<RenderQueue>,
-    pipeline: Res<CandlePipeline>,
+    pipeline: Option<Res<CandlePipeline>>,
 ) {
+    // Debug: always print once to confirm system runs
+    static LOGGED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if !LOGGED.load(std::sync::atomic::Ordering::Relaxed) {
+        println!("Prepare Debug: system entered, pipeline exists: {}", pipeline.is_some());
+    }
+
+    let Some(pipeline) = pipeline else {
+        if !LOGGED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            println!("Prepare Debug: NO PIPELINE - skipping");
+        }
+        return;
+    };
+
     // Early return if no data
     if extracted.instances.is_empty() {
         render_data.instance_count = 0;
         return;
+    }
+
+    if !LOGGED.load(std::sync::atomic::Ordering::Relaxed) {
+        println!("Prepare Debug: {} instances, buffer_capacity={}",
+            extracted.instances.len(), render_data.buffer_capacity);
     }
 
     // A. Create/update instance buffer
@@ -401,6 +426,14 @@ fn prepare_candles_instanced(
 
     // E. Update instance count
     render_data.instance_count = extracted.instances.len() as u32;
+
+    // Debug: confirm buffer creation
+    if !LOGGED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        println!("Prepare Complete: instance_count={}, has_buffer={}, has_bind_group={}",
+            render_data.instance_count,
+            render_data.instance_buffer.is_some(),
+            render_data.bind_group.is_some());
+    }
 }
 
 // ============================================================================
@@ -537,6 +570,9 @@ fn extract_candles_instanced(
     // Create instances for all visible candles
     extracted.instances.reserve(visible_candles.len());
 
+    let mut bull_count = 0;
+    let mut bear_count = 0;
+
     for (idx, candle) in visible_candles.iter().enumerate() {
         let candle_index = start + idx;
         let x_pos = time_to_x(candle_index);
@@ -546,9 +582,25 @@ fn extract_candles_instanced(
         let close_y = price_to_y(candle.close);
         let is_bullish = candle.close >= candle.open;
 
+        if is_bullish { bull_count += 1; } else { bear_count += 1; }
+
         extracted.instances.push(CandleInstance::with_bullish(
             x_pos, body_width, open_y, high_y, low_y, close_y, is_bullish,
         ));
+    }
+
+    // Debug: print first frame only
+    if extracted.last_candle_count == 0 {
+        println!("GPU Instancing Debug:");
+        println!("  Candles: {} (bull: {}, bear: {})", visible_candles.len(), bull_count, bear_count);
+        println!("  Viewport: {:?}", viewport);
+        println!("  Body width: {}", body_width);
+        if let Some(first) = extracted.instances.first() {
+            println!("  First instance: x={}, w={}, o={}, h={}, l={}, c={}, bull={}",
+                first.x_position, first.width, first.open, first.high, first.low, first.close, first.is_bullish);
+        }
+        println!("  Colors: bull={:?}, bear={:?}, wick={:?}",
+            extracted.bull_color, extracted.bear_color, extracted.wick_color);
     }
 
     // Update tracking state
@@ -589,13 +641,18 @@ pub struct CandlestickInstancedPlugin;
 
 impl Plugin for CandlestickInstancedPlugin {
     fn build(&self, app: &mut App) {
+        println!("CandlestickInstancedPlugin::build() called");
+
         // Register main world resource for toggling instancing
         app.init_resource::<InstancingEnabled>();
 
         // Get the render sub-app
         let Some(render_app) = app.get_sub_app_mut(RenderApp) else {
+            println!("WARNING: RenderApp not available!");
             return;
         };
+
+        println!("RenderApp found, registering systems...");
 
         // Register render world resources
         render_app
@@ -626,9 +683,14 @@ impl Plugin for CandlestickInstancedPlugin {
     }
 
     fn finish(&self, app: &mut App) {
+        println!("CandlestickInstancedPlugin::finish() called");
+
         let Some(render_app) = app.get_sub_app_mut(RenderApp) else {
+            println!("WARNING: RenderApp not available in finish!");
             return;
         };
+
+        println!("Creating pipeline...");
 
         let render_device = render_app.world().resource::<RenderDevice>();
 
@@ -698,5 +760,7 @@ impl Plugin for CandlestickInstancedPlugin {
             pipeline_id,
             bind_group_layout,
         });
+
+        println!("CandlePipeline inserted successfully");
     }
 }

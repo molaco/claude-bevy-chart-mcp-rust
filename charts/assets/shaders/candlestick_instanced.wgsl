@@ -1,5 +1,6 @@
 // GPU Instanced Candlestick Rendering Shader
 // Each instance represents one candlestick with wick and body
+// Renders 12 vertices per instance: 6 for wick (0-5), 6 for body (6-11)
 
 struct ViewUniform {
     view_proj: mat4x4<f32>,
@@ -22,36 +23,35 @@ struct VertexOutput {
 }
 
 // Helper function to get quad X coordinate based on vertex index
+// Returns values for: bottom-left, bottom-right, top-right, bottom-left, top-right, top-left
 fn get_quad_x(index: u32) -> f32 {
     switch index {
-        case 0u: { return -0.5; }
-        case 1u: { return 0.5; }
-        case 2u: { return 0.5; }
-        case 3u: { return -0.5; }
-        case 4u: { return 0.5; }
-        default: { return -0.5; }  // case 5u
+        case 0u: { return -0.5; }  // bottom-left
+        case 1u: { return 0.5; }   // bottom-right
+        case 2u: { return 0.5; }   // top-right
+        case 3u: { return -0.5; }  // bottom-left (triangle 2)
+        case 4u: { return 0.5; }   // top-right
+        default: { return -0.5; }  // case 5u: top-left
     }
 }
 
 // Helper function to get quad Y coordinate based on vertex index
 fn get_quad_y(index: u32) -> f32 {
     switch index {
-        case 0u: { return 0.0; }
-        case 1u: { return 0.0; }
-        case 2u: { return 1.0; }
-        case 3u: { return 0.0; }
-        case 4u: { return 1.0; }
-        default: { return 1.0; }  // case 5u
+        case 0u: { return 0.0; }  // bottom
+        case 1u: { return 0.0; }  // bottom
+        case 2u: { return 1.0; }  // top
+        case 3u: { return 0.0; }  // bottom
+        case 4u: { return 1.0; }  // top
+        default: { return 1.0; }  // case 5u: top
     }
 }
 
 @vertex
 fn vertex(
-    input: VertexInput,
     @builtin(vertex_index) vertex_index: u32,
+    input: VertexInput,
 ) -> VertexOutput {
-    var out: VertexOutput;
-
     // Unpack instance data
     let x_position = input.data0.x;
     let width = input.data0.y;
@@ -61,62 +61,53 @@ fn vertex(
     let close = input.data1.y;
     let is_bullish = input.data1.z;
 
-    // Determine which part we're rendering (wick or body)
-    let local_vertex_index = vertex_index % 6u;
-    let is_wick = vertex_index < 6u;
+    // Each candle uses 12 vertices: 0-5 for wick (drawn first), 6-11 for body (drawn on top)
+    let is_body = vertex_index >= 6u;
+    let local_vert = vertex_index % 6u;
 
-    var position: vec2<f32>;
+    var pos: vec2<f32>;
     var color: vec4<f32>;
-    var z_depth: f32;
 
-    if (is_wick) {
-        // Render wick (thin vertical line from low to high)
-        let wick_width = max(width * 0.1, 1.0);
-        let wick_height = high - low;
+    // Calculate wick width (needed for body minimum)
+    let wick_width = max(width * 0.15, 2.0);
 
-        let local_x = get_quad_x(local_vertex_index) * wick_width;
-        let local_y = get_quad_y(local_vertex_index) * wick_height;
+    // Get normalized quad position using helper functions
+    let quad_x = get_quad_x(local_vert);
+    let quad_y = get_quad_y(local_vert);
 
-        position = vec2<f32>(
-            x_position + local_x,
-            low + local_y
-        );
-
-        color = view.wick_color;
-        z_depth = 0.0;  // Behind body
-    } else {
-        // Render body (rectangle from open to close)
+    if is_body {
+        // Body: wider rectangle (drawn second, on top of wick)
+        let body_width = max(width, wick_width);
         let body_bottom = min(open, close);
         let body_top = max(open, close);
-        let body_height = body_top - body_bottom;
+        let body_height = max(body_top - body_bottom, 1.0);
 
-        let local_x = get_quad_x(local_vertex_index) * width;
-        let local_y = get_quad_y(local_vertex_index) * body_height;
+        pos.x = x_position + quad_x * body_width;
+        pos.y = body_bottom + quad_y * body_height;
 
-        position = vec2<f32>(
-            x_position + local_x,
-            body_bottom + local_y
-        );
-
-        // Choose color based on bullish/bearish
-        if (is_bullish > 0.5) {
+        // Color based on bullish/bearish
+        if is_bullish > 0.5 {
             color = view.bull_color;
         } else {
             color = view.bear_color;
         }
+    } else {
+        // Wick: thin vertical line (drawn first, behind body)
+        let wick_height = high - low;
 
-        z_depth = 0.1;  // In front of wick
+        pos.x = x_position + quad_x * wick_width;
+        pos.y = low + quad_y * max(wick_height, 1.0);
+        color = view.wick_color;
     }
 
-    // Transform to clip space
-    let world_position = vec4<f32>(position.x, position.y, z_depth, 1.0);
-    out.clip_position = view.view_proj * world_position;
+    // Transform from world coordinates to clip space
+    var out: VertexOutput;
+    out.clip_position = view.view_proj * vec4<f32>(pos, 0.0, 1.0);
     out.color = color;
-
     return out;
 }
 
 @fragment
-fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
-    return input.color;
+fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
+    return in.color;
 }
