@@ -7,125 +7,14 @@ use chrono::{DateTime, Utc};
 // RENDERING SYSTEMS
 // ============================================================================
 
-pub fn render_candlesticks(
-    mut commands: Commands,
-    chart: Res<Chart>,
-    query: Query<Entity, With<PriceElement>>,
-) {
-    if !chart.needs_redraw {
-        return;
-    }
-
-    // Despawn all existing price elements
-    for entity in query.iter() {
-        commands.entity(entity).despawn();
-    }
-
-    // Find the Price pane
-    let price_pane = chart.panes.iter().find(|p| matches!(p.id, PaneId::Price));
-
-    if price_pane.is_none() {
-        return;
-    }
-    let price_pane = price_pane.unwrap();
-
-    // Get shared X-axis state
-    let start = chart.visible_candle_start;
-    let end = (start + chart.visible_candle_count).min(chart.candles.len());
-
-    if start >= end {
-        return;
-    }
-
-    for i in start..end {
-        let candle = &chart.candles[i];
-
-        // Calculate positions using ChartSpace::to_world() with shared X-axis params
-        let wick_bottom = price_pane.space.to_world(
-            i,
-            candle.low as f32,
-            chart.visible_candle_start,
-            chart.visible_candle_count,
-        );
-        let wick_top = price_pane.space.to_world(
-            i,
-            candle.high as f32,
-            chart.visible_candle_start,
-            chart.visible_candle_count,
-        );
-        let body_open = price_pane.space.to_world(
-            i,
-            candle.open as f32,
-            chart.visible_candle_start,
-            chart.visible_candle_count,
-        );
-        let body_close = price_pane.space.to_world(
-            i,
-            candle.close as f32,
-            chart.visible_candle_start,
-            chart.visible_candle_count,
-        );
-
-        let wick_center = Vec2::new(
-            (wick_bottom.x + wick_top.x) / 2.0,
-            (wick_bottom.y + wick_top.y) / 2.0,
-        );
-        let wick_height = (wick_top.y - wick_bottom.y).abs().max(1.0);
-
-        // Spawn wick entity (thin line, Z=0)
-        commands.spawn((
-            Sprite {
-                color: Color::srgb(0.5, 0.5, 0.5),
-                custom_size: Some(Vec2::new(1.0, wick_height)),
-                ..default()
-            },
-            Transform::from_translation(wick_center.extend(0.0)),
-            CandlestickWick { candle_index: i },
-            PriceElement,
-            PaneId::Price,
-        ));
-
-        // Spawn body entity (rectangle, Z=1 above wick)
-        let body_width = price_pane.space.candle_width_px * 0.7;
-        let body_height = (body_close.y - body_open.y).abs().max(1.0);
-        let body_center = Vec2::new(
-            (body_open.x + body_close.x) / 2.0,
-            (body_open.y + body_close.y) / 2.0,
-        );
-
-        let body_color = if candle.close >= candle.open {
-            Color::srgb(0.0, 0.8, 0.2) // Green
-        } else {
-            Color::srgb(0.9, 0.2, 0.2) // Red
-        };
-
-        commands.spawn((
-            Sprite {
-                color: body_color,
-                custom_size: Some(Vec2::new(body_width, body_height)),
-                ..default()
-            },
-            Transform::from_translation(body_center.extend(1.0)),
-            CandlestickBody { candle_index: i },
-            PriceElement,
-            PaneId::Price,
-        ));
-    }
-
-    println!(
-        "Rendered {} candles (indices {}-{})",
-        end - start,
-        start,
-        end - 1
-    );
-}
-
 pub fn render_volume_bars(
     mut commands: Commands,
-    chart: Res<Chart>,
+    viewport: Res<ViewportState>,
+    pane_manager: Res<PaneManager>,
+    candle_data: Res<CandleData>,
     query: Query<Entity, With<VolumeElement>>,
 ) {
-    if !chart.needs_redraw {
+    if !viewport.needs_redraw {
         return;
     }
 
@@ -135,36 +24,34 @@ pub fn render_volume_bars(
     }
 
     // Find the Volume pane
-    let volume_pane = chart.panes.iter().find(|p| matches!(p.id, PaneId::Volume));
-
-    if volume_pane.is_none() {
-        return;
-    }
-    let volume_pane = volume_pane.unwrap();
+    let volume_pane = match pane_manager.find_pane(PaneId::Volume) {
+        Some(pane) => pane,
+        None => return,
+    };
 
     // Get shared X-axis state
-    let start = chart.visible_candle_start;
-    let end = (start + chart.visible_candle_count).min(chart.candles.len());
+    let start = viewport.visible_candle_start;
+    let end = (start + viewport.visible_candle_count).min(candle_data.candles.len());
 
     if start >= end {
         return;
     }
 
     for i in start..end {
-        let candle = &chart.candles[i];
+        let candle = &candle_data.candles[i];
 
         // Calculate bottom (0) and top (volume) positions
         let bar_bottom = volume_pane.space.to_world(
             i,
             0.0,
-            chart.visible_candle_start,
-            chart.visible_candle_count,
+            viewport.visible_candle_start,
+            viewport.visible_candle_count,
         );
         let bar_top = volume_pane.space.to_world(
             i,
             candle.volume as f32,
-            chart.visible_candle_start,
-            chart.visible_candle_count,
+            viewport.visible_candle_start,
+            viewport.visible_candle_count,
         );
 
         let bar_center = Vec2::new(
@@ -817,25 +704,29 @@ pub fn update_crosshair(
     }
 }
 
-pub fn render_moving_averages(mut gizmos: Gizmos, chart: Res<Chart>) {
+pub fn render_moving_averages(
+    mut gizmos: Gizmos,
+    viewport: Res<ViewportState>,
+    pane_manager: Res<PaneManager>,
+    candle_data: Res<CandleData>,
+    indicator_state: Res<IndicatorState>,
+) {
     // Find the Price pane (indicators overlay on price)
-    let price_pane = chart.panes.iter().find(|p| matches!(p.id, PaneId::Price));
-
-    if price_pane.is_none() {
-        return;
-    }
-    let price_pane = price_pane.unwrap();
+    let price_pane = match pane_manager.price_pane() {
+        Some(pane) => pane,
+        None => return,
+    };
 
     // Get shared X-axis state
-    let start = chart.visible_candle_start;
-    let end = (start + chart.visible_candle_count).min(chart.candles.len());
+    let start = viewport.visible_candle_start;
+    let end = (start + viewport.visible_candle_count).min(candle_data.candles.len());
 
     if start >= end {
         return;
     }
 
     // Render each Moving Average using Gizmos for smooth continuous lines
-    for ma in &chart.indicators {
+    for ma in &indicator_state.indicators {
         if !ma.visible || ma.values.is_empty() {
             continue;
         }
@@ -850,15 +741,15 @@ pub fn render_moving_averages(mut gizmos: Gizmos, chart: Res<Chart>) {
                 let curr_pos = price_pane.space.to_world(
                     i,
                     curr_value,
-                    chart.visible_candle_start,
-                    chart.visible_candle_count,
+                    viewport.visible_candle_start,
+                    viewport.visible_candle_count,
                 );
 
                 let next_pos = price_pane.space.to_world(
                     i + 1,
                     next_value,
-                    chart.visible_candle_start,
-                    chart.visible_candle_count,
+                    viewport.visible_candle_start,
+                    viewport.visible_candle_count,
                 );
 
                 // Draw line segment with Gizmos (no gaps or artifacts!)

@@ -16,7 +16,7 @@
 //! - `InstancingEnabled`: Toggle for enabling/disabling GPU instancing
 
 use super::instancing::{CandleInstance, ViewUniform};
-use crate::types::{Chart, ChartColors, PaneType};
+use crate::types::{CandleData, ChartColors, PaneManager, ViewportState};
 use bevy::asset::AssetServer;
 use bevy::core_pipeline::core_2d::graph::{Core2d, Node2d};
 use bevy::ecs::query::QueryItem;
@@ -481,7 +481,9 @@ fn color_to_array(color: &Color) -> [f32; 4] {
 /// - If state hasn't changed (optimization)
 fn extract_candles_instanced(
     mut extracted: ResMut<ExtractedCandlesInstanced>,
-    chart: Extract<Res<Chart>>,
+    candle_data: Extract<Res<CandleData>>,
+    viewport_state: Extract<Res<ViewportState>>,
+    pane_manager: Extract<Res<PaneManager>>,
     instancing_enabled: Extract<Res<InstancingEnabled>>,
     chart_colors: Extract<Res<ChartColors>>,
     windows: Extract<Query<&Window>>,
@@ -502,7 +504,7 @@ fn extract_candles_instanced(
     }
 
     // Early return if no data
-    if chart.candles.is_empty() {
+    if candle_data.candles.is_empty() {
         return;
     }
 
@@ -514,25 +516,21 @@ fn extract_candles_instanced(
     };
 
     // Find the Price pane
-    let price_pane = match chart
-        .panes
-        .iter()
-        .find(|p| matches!(p.pane_type, PaneType::Price))
-    {
+    let price_pane = match pane_manager.price_pane() {
         Some(pane) => pane,
         None => return,
     };
 
-    // Get visible candle range
-    let start = chart.visible_candle_start;
-    let count = chart.visible_candle_count;
-    let end = (start + count).min(chart.candles.len());
+    // Get visible candle range from ViewportState
+    let start = viewport_state.visible_candle_start;
+    let count = viewport_state.visible_candle_count;
+    let end = (start + count).min(candle_data.candles.len());
 
     if start >= end {
         return;
     }
 
-    let visible_candles = &chart.candles[start..end];
+    let visible_candles = &candle_data.candles[start..end];
 
     // Use ChartSpace's price range (same as old rendering system)
     let price_min = price_pane.space.visible_price_min;
@@ -544,8 +542,8 @@ fn extract_candles_instanced(
     }
 
     // Check if state changed - skip expensive rebuild if nothing changed
-    let state_unchanged = extracted.last_time_start == chart.candles[start].time
-        && extracted.last_time_end == chart.candles[end - 1].time
+    let state_unchanged = extracted.last_time_start == candle_data.candles[start].time
+        && extracted.last_time_end == candle_data.candles[end - 1].time
         && extracted.last_candle_count == visible_candles.len()
         && (extracted.last_viewport_width - viewport_width).abs() < 1.0_f32
         && (extracted.last_viewport_height - viewport_height).abs() < 1.0_f32
@@ -565,7 +563,7 @@ fn extract_candles_instanced(
     let viewport = &price_pane.space.viewport;
 
     // Calculate candle width and body width (use visible_candle_count like old system)
-    let visible_count = chart.visible_candle_count;
+    let visible_count = viewport_state.visible_candle_count;
     let candle_width = viewport.width() / visible_count.max(1) as f32;
     let body_width = candle_width * 0.7; // 70% for body (same as old system)
 
@@ -641,8 +639,8 @@ fn extract_candles_instanced(
     }
 
     // Update tracking state
-    extracted.last_time_start = chart.candles[start].time;
-    extracted.last_time_end = chart.candles[end - 1].time;
+    extracted.last_time_start = candle_data.candles[start].time;
+    extracted.last_time_end = candle_data.candles[end - 1].time;
     extracted.last_candle_count = visible_candles.len();
     extracted.last_viewport_width = viewport_width;
     extracted.last_viewport_height = viewport_height;

@@ -12,6 +12,25 @@ use rendering::{CandlestickInstancedPlugin, InstancingEnabled};
 use types::*;
 
 // ============================================================================
+// SYSTEM SETS
+// ============================================================================
+
+/// System sets for organizing chart systems into logical phases.
+/// This provides explicit ordering to prevent race conditions and
+/// ensures proper data flow between systems.
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ChartSystems {
+    /// Input handling: mouse, keyboard, UI interactions
+    Input,
+    /// State updates: lazy loading, data changes
+    StateUpdate,
+    /// Rendering: grid, axes, candles, indicators
+    Rendering,
+    /// Cleanup: reset flags, prepare for next frame
+    Cleanup,
+}
+
+// ============================================================================
 // MAIN
 // ============================================================================
 
@@ -28,25 +47,55 @@ fn main() {
         }))
         .add_plugins(FrameTimeDiagnosticsPlugin::default())
         .add_plugins(CandlestickInstancedPlugin)
+        // Configure system set ordering: Input -> StateUpdate -> Rendering -> Cleanup
+        .configure_sets(
+            Update,
+            (
+                ChartSystems::Input,
+                ChartSystems::StateUpdate.after(ChartSystems::Input),
+                ChartSystems::Rendering.after(ChartSystems::StateUpdate),
+                ChartSystems::Cleanup.after(ChartSystems::Rendering),
+            ),
+        )
+        // Startup systems
         .add_systems(Startup, setup)
         .add_systems(Startup, setup_fps_counter)
-        .add_systems(Update, (handle_mouse_input, update_crosshair).chain()) // Ensures crosshair updates immediately after mouse input
-        .add_systems(Update, toggle_volume_pane)
-        .add_systems(Update, toggle_sma_indicators)
-        .add_systems(Update, check_lazy_load)
-        .add_systems(Update, screenshot_on_keypress)
-        .add_systems(Update, update_fps_counter)
+        // Input systems - handle user interaction first
+        .add_systems(
+            Update,
+            (
+                handle_mouse_input,
+                toggle_volume_pane,
+                toggle_sma_indicators,
+                screenshot_on_keypress,
+            )
+                .in_set(ChartSystems::Input),
+        )
+        // State update systems - update data based on input
+        .add_systems(
+            Update,
+            (
+                check_lazy_load,
+                update_crosshair,
+            )
+                .chain()  // Crosshair needs updated data from lazy load
+                .in_set(ChartSystems::StateUpdate),
+        )
+        // Rendering systems - draw based on current state
         .add_systems(
             Update,
             (
                 render_grid_and_axes,
-                // render_candlesticks,  // Disabled - using GPU instancing instead
                 render_moving_averages,
                 render_volume_bars,
-                reset_redraw_flag,
             )
-                .chain(),
-        ) // Run rendering systems in sequence, then reset flag
+                .chain()  // Run in sequence for consistent rendering order
+                .in_set(ChartSystems::Rendering),
+        )
+        // Cleanup systems - reset flags after rendering
+        .add_systems(Update, reset_redraw_flag.in_set(ChartSystems::Cleanup))
+        // Utility systems (run independently)
+        .add_systems(Update, update_fps_counter)
         .run();
 }
 
@@ -90,56 +139,65 @@ fn setup(mut commands: Commands) {
     let spacing = right_spacing_candles(visible_candle_count);
     let visible_candle_start = (candles.len() + spacing).saturating_sub(visible_candle_count);
 
-    // Initialize multi-pane layout: 70% Price + 30% Volume
-    let mut panes = vec![
+    // === NEW: Create separated resources ===
+
+    // CandleData resource
+    let candle_data = CandleData {
+        candles: candles.clone(),
+        candle_offset: 0,
+    };
+
+    // ChartMetadata resource
+    let chart_metadata = ChartMetadata::new(ticker_id, timeframe);
+
+    // ViewportState resource
+    let viewport_state = ViewportState {
+        visible_candle_start,
+        visible_candle_count,
+        total_area,
+        needs_redraw: true,
+        loading: false,
+    };
+
+    // IndicatorState resource
+    let indicator_state = IndicatorState::new(vec![
+        MovingAverage::new_sma(&candles, 20, Color::srgb(1.0, 0.8, 0.0)), // Yellow SMA-20
+        MovingAverage::new_sma(&candles, 50, Color::srgb(0.0, 1.0, 1.0)), // Cyan SMA-50
+        MovingAverage::new_sma(&candles, 200, Color::srgb(1.0, 0.0, 1.0)), // Magenta SMA-200
+    ]);
+
+    // PaneManager resource
+    let mut pane_manager = PaneManager::new(vec![
         Pane::new(
             PaneId::Price,
             PaneType::Price,
             0.7,             // 70% of chart height
-            Rect::default(), // Will be calculated by calculate_pane_layouts
+            Rect::default(), // Will be calculated by calculate_layouts
             visible_candle_count,
         ),
         Pane::new(
             PaneId::Volume,
             PaneType::Volume,
             0.3,             // 30% of chart height
-            Rect::default(), // Will be calculated by calculate_pane_layouts
+            Rect::default(), // Will be calculated by calculate_layouts
             visible_candle_count,
         ),
-    ];
+    ]);
 
-    // Calculate pane layouts
-    calculate_pane_layouts(&mut panes, total_area, visible_candle_count);
+    // Calculate pane layouts using PaneManager
+    pane_manager.calculate_layouts(total_area, visible_candle_count);
 
-    // Calculate Moving Average indicators (before fitting bounds so we can include them)
-    let indicators = vec![
-        MovingAverage::new_sma(&candles, 20, Color::srgb(1.0, 0.8, 0.0)), // Yellow SMA-20
-        MovingAverage::new_sma(&candles, 50, Color::srgb(0.0, 1.0, 1.0)), // Cyan SMA-50
-        MovingAverage::new_sma(&candles, 200, Color::srgb(1.0, 0.0, 1.0)), // Magenta SMA-200
-    ];
+    // Fit Y-axis bounds for each pane
+    pane_manager.update_pane_bounds(
+        &candle_data.candles,
+        &indicator_state.indicators,
+        visible_candle_start,
+        visible_candle_count,
+    );
 
-    // Fit Y-axis bounds for each pane (including indicators for Price pane)
-    for pane in panes.iter_mut() {
-        match pane.pane_type {
-            PaneType::Price => {
-                pane.space.fit_price_bounds_with_indicators(
-                    &candles,
-                    &indicators,
-                    visible_candle_start,
-                    visible_candle_count,
-                );
-            }
-            PaneType::Volume => {
-                pane.space
-                    .fit_volume_bounds(&candles, visible_candle_start, visible_candle_count);
-            }
-            _ => {}
-        }
-    }
-
-    // Create deprecated space for backward compatibility (not used in multi-pane)
+    // === LEGACY: Keep old Chart resource for backward compatibility during migration ===
+    // TODO: Remove after all systems are migrated to use new resources
     let space = ChartSpace::new(total_area, visible_candle_count);
-
     let chart = Chart {
         ticker_id,
         timeframe: timeframe.to_string(),
@@ -147,10 +205,10 @@ fn setup(mut commands: Commands) {
         candle_offset: 0,
         visible_candle_start,
         visible_candle_count,
-        panes,
+        panes: pane_manager.panes.clone(),
         total_area,
-        space, // Deprecated
-        indicators,
+        space,
+        indicators: indicator_state.indicators.clone(),
         needs_redraw: true,
         loading: false,
     };
@@ -158,6 +216,14 @@ fn setup(mut commands: Commands) {
     // Initialize persistent crosshair entities (needs chart reference)
     init_crosshair(&mut commands, &chart);
 
+    // Insert new separated resources
+    commands.insert_resource(candle_data);
+    commands.insert_resource(chart_metadata);
+    commands.insert_resource(viewport_state);
+    commands.insert_resource(indicator_state);
+    commands.insert_resource(pane_manager);
+
+    // Insert legacy Chart resource (for backward compatibility during migration)
     commands.insert_resource(db);
     commands.insert_resource(chart);
     commands.insert_resource(InteractionState::default());
@@ -178,9 +244,12 @@ fn setup(mut commands: Commands) {
 
 /// Reset the redraw flag after all rendering systems have completed
 /// This prevents unnecessary entity despawn/spawn on every frame
-fn reset_redraw_flag(mut chart: ResMut<Chart>) {
+fn reset_redraw_flag(mut chart: ResMut<Chart>, mut viewport_state: ResMut<ViewportState>) {
     if chart.needs_redraw {
         chart.needs_redraw = false;
+    }
+    if viewport_state.needs_redraw {
+        viewport_state.needs_redraw = false;
     }
 }
 

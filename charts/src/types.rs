@@ -17,6 +17,227 @@ pub struct Candle {
     pub volume: f64,
 }
 
+// ============================================================================
+// SEPARATED RESOURCES (Decomposed from Chart god object)
+// ============================================================================
+
+/// Candle data resource - holds all loaded candle data
+#[derive(Resource)]
+pub struct CandleData {
+    pub candles: Vec<Candle>,
+    pub candle_offset: usize,          // Global offset (for lazy loading)
+}
+
+impl Default for CandleData {
+    fn default() -> Self {
+        Self {
+            candles: Vec::new(),
+            candle_offset: 0,
+        }
+    }
+}
+
+/// Viewport state resource - manages the visible window into the data
+#[derive(Resource)]
+pub struct ViewportState {
+    pub visible_candle_start: usize,
+    pub visible_candle_count: usize,
+    pub total_area: Rect,              // Total chart viewport for resize calculations
+    pub needs_redraw: bool,
+    pub loading: bool,                 // True when fetching more data
+}
+
+impl Default for ViewportState {
+    fn default() -> Self {
+        Self {
+            visible_candle_start: 0,
+            visible_candle_count: 50,
+            total_area: Rect::default(),
+            needs_redraw: true,
+            loading: false,
+        }
+    }
+}
+
+/// Pane manager resource - manages multi-pane layout
+#[derive(Resource)]
+pub struct PaneManager {
+    pub panes: Vec<Pane>,
+    pub separator_gap: f32,
+}
+
+impl Default for PaneManager {
+    fn default() -> Self {
+        Self {
+            panes: Vec::new(),
+            separator_gap: 24.0,
+        }
+    }
+}
+
+impl PaneManager {
+    pub fn new(panes: Vec<Pane>) -> Self {
+        Self {
+            panes,
+            separator_gap: 24.0,
+        }
+    }
+
+    pub fn find_pane(&self, id: PaneId) -> Option<&Pane> {
+        self.panes.iter().find(|p| p.id == id)
+    }
+
+    pub fn find_pane_mut(&mut self, id: PaneId) -> Option<&mut Pane> {
+        self.panes.iter_mut().find(|p| p.id == id)
+    }
+
+    pub fn price_pane(&self) -> Option<&Pane> {
+        self.find_pane(PaneId::Price)
+    }
+
+    pub fn volume_pane(&self) -> Option<&Pane> {
+        self.find_pane(PaneId::Volume)
+    }
+
+    /// Calculate and assign viewports to each pane based on height percentages
+    pub fn calculate_layouts(&mut self, total_area: Rect, visible_candle_count: usize) {
+        if self.panes.is_empty() {
+            return;
+        }
+
+        // Calculate total height available after accounting for separators
+        let num_separators = self.panes.len().saturating_sub(1);
+        let separator_total_height = num_separators as f32 * self.separator_gap;
+        let available_height = total_area.height() - separator_total_height;
+
+        // Start from the top
+        let mut current_y = total_area.max.y;
+        let num_panes = self.panes.len();
+
+        for (i, pane) in self.panes.iter_mut().enumerate() {
+            let pane_height = available_height * pane.height_percent;
+            let pane_min_y = current_y - pane_height;
+            let pane_max_y = current_y;
+
+            // Create viewport for this pane
+            pane.space.viewport = Rect::from_corners(
+                Vec2::new(total_area.min.x, pane_min_y),
+                Vec2::new(total_area.max.x, pane_max_y),
+            );
+
+            // Recalculate cached values
+            pane.space.recalculate_cache(visible_candle_count);
+
+            // Move down for next pane, adding separator gap if not the last pane
+            current_y = pane_min_y;
+            if i < num_panes - 1 {
+                current_y -= self.separator_gap;
+            }
+        }
+    }
+
+    /// Update Y-axis bounds for all panes based on their type
+    pub fn update_pane_bounds(&mut self, candles: &[Candle], indicators: &[MovingAverage], visible_start: usize, visible_count: usize) {
+        for pane in self.panes.iter_mut() {
+            match pane.pane_type {
+                PaneType::Price => {
+                    pane.space.fit_price_bounds_with_indicators(
+                        candles,
+                        indicators,
+                        visible_start,
+                        visible_count
+                    );
+                }
+                PaneType::Volume => {
+                    pane.space.fit_volume_bounds(
+                        candles,
+                        visible_start,
+                        visible_count
+                    );
+                }
+                PaneType::Indicator { .. } => {
+                    // TODO: Handle indicators when implemented
+                }
+            }
+        }
+    }
+}
+
+/// Indicator state resource - manages moving average indicators
+#[derive(Resource)]
+pub struct IndicatorState {
+    pub indicators: Vec<MovingAverage>,
+}
+
+impl Default for IndicatorState {
+    fn default() -> Self {
+        Self {
+            indicators: Vec::new(),
+        }
+    }
+}
+
+impl IndicatorState {
+    pub fn new(indicators: Vec<MovingAverage>) -> Self {
+        Self { indicators }
+    }
+
+    pub fn visible_indicators(&self) -> impl Iterator<Item = &MovingAverage> {
+        self.indicators.iter().filter(|ma| ma.visible)
+    }
+
+    pub fn toggle_visibility(&mut self, index: usize) {
+        if let Some(ma) = self.indicators.get_mut(index) {
+            ma.visible = !ma.visible;
+        }
+    }
+
+    pub fn toggle_all(&mut self) {
+        let any_visible = self.indicators.iter().any(|ma| ma.visible);
+        let new_state = !any_visible;
+        for ma in self.indicators.iter_mut() {
+            ma.visible = new_state;
+        }
+    }
+}
+
+/// Chart metadata resource - holds ticker and timeframe info
+#[derive(Resource)]
+pub struct ChartMetadata {
+    pub ticker_id: i32,
+    pub timeframe: String,
+}
+
+impl Default for ChartMetadata {
+    fn default() -> Self {
+        Self {
+            ticker_id: 0,
+            timeframe: "1m".to_string(),
+        }
+    }
+}
+
+impl ChartMetadata {
+    pub fn new(ticker_id: i32, timeframe: &str) -> Self {
+        Self {
+            ticker_id,
+            timeframe: timeframe.to_string(),
+        }
+    }
+
+    /// Calculate interval in milliseconds based on timeframe
+    pub fn interval_ms(&self) -> i64 {
+        match self.timeframe.as_str() {
+            "1m" => 60 * 1000,
+            "15m" => 15 * 60 * 1000,
+            "1h" => 60 * 60 * 1000,
+            "4h" => 4 * 60 * 60 * 1000,
+            "1d" => 24 * 60 * 60 * 1000,
+            _ => 60 * 60 * 1000,
+        }
+    }
+}
+
 /// Coordinate space for chart rendering
 #[derive(Debug, Clone)]
 pub struct ChartSpace {
