@@ -1,7 +1,11 @@
 use bevy::prelude::*;
 use bevy::input::mouse::MouseWheel;
 use bevy::window::{CursorIcon, SystemCursorIcon};
-use crate::types::*;
+use crate::types::{
+    CandleData, ChartDatabase, ChartMetadata, IndicatorState, InteractionState,
+    MovingAverage, Pane, PaneId, PaneManager, PaneType, ViewportState, VolumeToggleState,
+    right_spacing_candles,
+};
 
 // ============================================================================
 // INTERACTION SYSTEMS
@@ -9,7 +13,6 @@ use crate::types::*;
 
 pub fn handle_mouse_input(
     mut commands: Commands,
-    mut chart: ResMut<Chart>,
     candle_data: Res<CandleData>,
     mut viewport_state: ResMut<ViewportState>,
     mut pane_manager: ResMut<PaneManager>,
@@ -112,10 +115,6 @@ pub fn handle_mouse_input(
             );
 
             viewport_state.needs_redraw = true;
-
-            // Sync to legacy Chart resource
-            chart.panes = pane_manager.panes.clone();
-            chart.needs_redraw = true;
         }
 
         return; // Skip pan/zoom while resizing
@@ -160,11 +159,6 @@ pub fn handle_mouse_input(
 
             viewport_state.needs_redraw = true;
             interaction.drag_start_pos = interaction.mouse_pos;
-
-            // Sync to legacy Chart resource
-            chart.visible_candle_start = viewport_state.visible_candle_start;
-            chart.panes = pane_manager.panes.clone();
-            chart.needs_redraw = true;
         }
     }
 
@@ -204,12 +198,6 @@ pub fn handle_mouse_input(
 
             viewport_state.needs_redraw = true;
 
-            // Sync to legacy Chart resource
-            chart.visible_candle_start = viewport_state.visible_candle_start;
-            chart.visible_candle_count = viewport_state.visible_candle_count;
-            chart.panes = pane_manager.panes.clone();
-            chart.needs_redraw = true;
-
             println!(
                 "Zoomed: showing {} candles starting from {}",
                 viewport_state.visible_candle_count,
@@ -220,7 +208,6 @@ pub fn handle_mouse_input(
 }
 
 pub fn check_lazy_load(
-    mut chart: ResMut<Chart>,
     mut candle_data: ResMut<CandleData>,
     mut viewport_state: ResMut<ViewportState>,
     mut indicator_state: ResMut<IndicatorState>,
@@ -278,17 +265,10 @@ pub fn check_lazy_load(
                 }
 
                 viewport_state.needs_redraw = true;
-
-                // Sync to legacy Chart resource
-                chart.candles = candle_data.candles.clone();
-                chart.visible_candle_start = viewport_state.visible_candle_start;
-                chart.indicators = indicator_state.indicators.clone();
-                chart.needs_redraw = true;
             }
         }
 
         viewport_state.loading = false;
-        chart.loading = false;
     }
 
     // Load more recent data when scrolling right
@@ -329,16 +309,10 @@ pub fn check_lazy_load(
                 }
 
                 viewport_state.needs_redraw = true;
-
-                // Sync to legacy Chart resource
-                chart.candles = candle_data.candles.clone();
-                chart.indicators = indicator_state.indicators.clone();
-                chart.needs_redraw = true;
             }
         }
 
         viewport_state.loading = false;
-        chart.loading = false;
     }
 }
 
@@ -346,7 +320,6 @@ pub fn check_lazy_load(
 pub fn toggle_volume_pane(
     keys: Res<ButtonInput<KeyCode>>,
     mut toggle_state: ResMut<VolumeToggleState>,
-    mut chart: ResMut<Chart>,
     candle_data: Res<CandleData>,
     mut viewport_state: ResMut<ViewportState>,
     mut pane_manager: ResMut<PaneManager>,
@@ -402,10 +375,6 @@ pub fn toggle_volume_pane(
 
         // Trigger redraw
         viewport_state.needs_redraw = true;
-
-        // Sync to legacy Chart resource
-        chart.panes = pane_manager.panes.clone();
-        chart.needs_redraw = true;
     }
 }
 
@@ -413,9 +382,8 @@ pub fn toggle_volume_pane(
 /// Keys: 1 = SMA-20, 2 = SMA-50, 3 = SMA-200, S = Toggle all SMAs
 pub fn toggle_sma_indicators(
     keys: Res<ButtonInput<KeyCode>>,
-    mut chart: ResMut<Chart>,
     candle_data: Res<CandleData>,
-    viewport_state: Res<ViewportState>,
+    mut viewport_state: ResMut<ViewportState>,
     mut pane_manager: ResMut<PaneManager>,
     mut indicator_state: ResMut<IndicatorState>,
 ) {
@@ -467,9 +435,6 @@ pub fn toggle_sma_indicators(
             viewport_state.visible_candle_count,
         );
 
-        // Sync to legacy Chart resource
-        chart.indicators = indicator_state.indicators.clone();
-        chart.panes = pane_manager.panes.clone();
-        chart.needs_redraw = true;
+        viewport_state.needs_redraw = true;
     }
 }

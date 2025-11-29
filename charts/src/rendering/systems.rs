@@ -90,17 +90,17 @@ pub fn render_volume_bars(
 }
 
 /// Initialize persistent crosshair entities (called once at startup from setup)
-pub fn init_crosshair(commands: &mut Commands, chart: &Chart) {
+pub fn init_crosshair(commands: &mut Commands, pane_manager: &PaneManager) {
     let mut horizontal_lines = Vec::new();
     let mut price_labels = Vec::new();
 
     // Calculate chart bounds
-    if chart.panes.is_empty() {
+    if pane_manager.panes.is_empty() {
         return;
     }
 
-    let first_pane = &chart.panes[0];
-    let last_pane = &chart.panes[chart.panes.len() - 1];
+    let first_pane = &pane_manager.panes[0];
+    let last_pane = &pane_manager.panes[pane_manager.panes.len() - 1];
     let chart_top = first_pane.space.viewport.max.y;
     let chart_bottom = last_pane.space.viewport.min.y;
     let chart_right = first_pane.space.viewport.max.x;
@@ -133,7 +133,7 @@ pub fn init_crosshair(commands: &mut Commands, chart: &Chart) {
     }
 
     // Spawn horizontal lines and price labels (one per pane)
-    for pane in &chart.panes {
+    for pane in &pane_manager.panes {
         let viewport = &pane.space.viewport;
 
         // Horizontal line segments for this pane (dashed pattern)
@@ -225,43 +225,43 @@ pub fn init_crosshair(commands: &mut Commands, chart: &Chart) {
     println!("Initialized persistent crosshair entities (dashed pattern)");
 }
 
-pub fn render_grid_and_axes(
+// ============================================================================
+// GRID SYSTEMS (Split from render_grid_and_axes)
+// ============================================================================
+
+/// Render horizontal and vertical grid lines within each pane
+pub fn render_grid_lines(
     mut commands: Commands,
-    chart: Res<Chart>,
+    viewport_state: Res<ViewportState>,
+    pane_manager: Res<PaneManager>,
+    candle_data: Res<CandleData>,
     grid: Res<ChartGrid>,
-    axes: Res<ChartAxes>,
-    query: Query<Entity, With<GridElement>>,
+    query: Query<Entity, With<GridLineElement>>,
 ) {
-    if !chart.needs_redraw {
+    if !viewport_state.needs_redraw {
         return;
     }
 
-    // Despawn existing grid elements
+    // Despawn existing grid line elements
     for entity in query.iter() {
         commands.entity(entity).despawn();
     }
 
-    if !grid.show_grid || chart.panes.is_empty() {
+    if !grid.show_grid || pane_manager.panes.is_empty() {
         return;
     }
 
-    // Calculate total chart bounds (from top of first pane to bottom of last pane)
-    let first_pane = &chart.panes[0];
-    let last_pane = &chart.panes[chart.panes.len() - 1];
-    let chart_top = first_pane.space.viewport.max.y;
-    let chart_bottom = last_pane.space.viewport.min.y;
+    // Calculate chart bounds
+    let first_pane = &pane_manager.panes[0];
     let chart_left = first_pane.space.viewport.min.x;
     let chart_right = first_pane.space.viewport.max.x;
 
-    // ========== PER-PANE HORIZONTAL GRID LINES & Y-AXIS LABELS ==========
-    for pane in &chart.panes {
+    // ========== HORIZONTAL GRID LINES (per pane) ==========
+    for pane in &pane_manager.panes {
         let viewport = &pane.space.viewport;
 
         for i in 0..=grid.y_tick_count {
             let value_percent = i as f32 / grid.y_tick_count as f32;
-            let value = pane.space.visible_price_min
-                + value_percent * (pane.space.visible_price_max - pane.space.visible_price_min);
-
             let y = viewport.min.y + value_percent * viewport.height();
 
             // Draw horizontal line
@@ -275,119 +275,21 @@ pub fn render_grid_and_axes(
                     ..default()
                 },
                 Transform::from_translation(line_center.extend(-1.0)),
-                GridElement,
-            ));
-
-            // Y-axis label on the right side
-            if axes.show_y_labels {
-                let label_x = chart_right + 50.0;
-                let label_text = format!("{:.2}", value);
-
-                commands.spawn((
-                    Text2d::new(label_text),
-                    TextFont {
-                        font_size: axes.label_size,
-                        ..default()
-                    },
-                    TextColor(axes.label_color),
-                    Transform::from_translation(Vec3::new(label_x, y, 2.0)),
-                    bevy::sprite::Anchor::CENTER_LEFT,
-                    GridElement,
-                ));
-            }
-        }
-    }
-
-    // ========== PANE BORDERS (Panel-style separation) ==========
-    for pane in &chart.panes {
-        let viewport = &pane.space.viewport;
-        let border_color = Color::srgba(0.5, 0.5, 0.5, 0.6);
-        let border_thickness = 2.0;
-
-        // Top border
-        commands.spawn((
-            Sprite {
-                color: border_color,
-                custom_size: Some(Vec2::new(viewport.width(), border_thickness)),
-                ..default()
-            },
-            Transform::from_translation(Vec3::new(viewport.center().x, viewport.max.y, 0.4)),
-            GridElement,
-        ));
-
-        // Bottom border
-        commands.spawn((
-            Sprite {
-                color: border_color,
-                custom_size: Some(Vec2::new(viewport.width(), border_thickness)),
-                ..default()
-            },
-            Transform::from_translation(Vec3::new(viewport.center().x, viewport.min.y, 0.4)),
-            GridElement,
-        ));
-
-        // Left border
-        commands.spawn((
-            Sprite {
-                color: border_color,
-                custom_size: Some(Vec2::new(border_thickness, viewport.height())),
-                ..default()
-            },
-            Transform::from_translation(Vec3::new(viewport.min.x, viewport.center().y, 0.4)),
-            GridElement,
-        ));
-
-        // Right border
-        commands.spawn((
-            Sprite {
-                color: border_color,
-                custom_size: Some(Vec2::new(border_thickness, viewport.height())),
-                ..default()
-            },
-            Transform::from_translation(Vec3::new(viewport.max.x, viewport.center().y, 0.4)),
-            GridElement,
-        ));
-    }
-
-    // ========== RESIZE GRIP (Horizontal lines in gaps) ==========
-    for i in 0..chart.panes.len() - 1 {
-        let pane_bottom = chart.panes[i].space.viewport.min.y;
-        let next_pane_top = chart.panes[i + 1].space.viewport.max.y;
-        let gap_center_y = (pane_bottom + next_pane_top) / 2.0;
-        let gap_center_x = (chart_left + chart_right) / 2.0;
-
-        let grip_width = 50.0;
-        let line_height = 2.0;
-        let line_spacing = 4.0;
-        let grip_color = Color::srgba(0.6, 0.6, 0.6, 0.7);
-
-        // Draw 2 horizontal lines
-        for j in 0..2 {
-            let offset = (j as f32 - 0.5) * (line_height + line_spacing);
-            let line_y = gap_center_y + offset;
-
-            commands.spawn((
-                Sprite {
-                    color: grip_color,
-                    custom_size: Some(Vec2::new(grip_width, line_height)),
-                    ..default()
-                },
-                Transform::from_translation(Vec3::new(gap_center_x, line_y, 0.6)),
-                GridElement,
+                GridLineElement,
             ));
         }
     }
 
-    // ========== VERTICAL GRID LINES (Time - per pane) ==========
-    for pane in &chart.panes {
+    // ========== VERTICAL GRID LINES (per pane) ==========
+    for pane in &pane_manager.panes {
         let viewport = &pane.space.viewport;
 
         for i in 0..=grid.x_tick_count {
             let candle_percent = i as f32 / grid.x_tick_count as f32;
-            let candle_index = chart.visible_candle_start
-                + (candle_percent * chart.visible_candle_count as f32) as usize;
+            let candle_index = viewport_state.visible_candle_start
+                + (candle_percent * viewport_state.visible_candle_count as f32) as usize;
 
-            if candle_index >= chart.candles.len() {
+            if candle_index >= candle_data.candles.len() {
                 continue;
             }
 
@@ -404,24 +306,219 @@ pub fn render_grid_and_axes(
                     ..default()
                 },
                 Transform::from_translation(line_center.extend(-1.0)),
-                GridElement,
+                GridLineElement,
             ));
         }
     }
+}
 
-    // ========== X-AXIS TIME LABELS (at bottom of last pane) ==========
+/// Render borders around each pane (panel-style separation)
+pub fn render_pane_borders(
+    mut commands: Commands,
+    viewport_state: Res<ViewportState>,
+    pane_manager: Res<PaneManager>,
+    query: Query<Entity, With<PaneBorderElement>>,
+) {
+    if !viewport_state.needs_redraw {
+        return;
+    }
+
+    // Despawn existing border elements
+    for entity in query.iter() {
+        commands.entity(entity).despawn();
+    }
+
+    if pane_manager.panes.is_empty() {
+        return;
+    }
+
+    let border_color = Color::srgba(0.5, 0.5, 0.5, 0.6);
+    let border_thickness = 2.0;
+
+    for pane in &pane_manager.panes {
+        let viewport = &pane.space.viewport;
+
+        // Top border
+        commands.spawn((
+            Sprite {
+                color: border_color,
+                custom_size: Some(Vec2::new(viewport.width(), border_thickness)),
+                ..default()
+            },
+            Transform::from_translation(Vec3::new(viewport.center().x, viewport.max.y, 0.4)),
+            PaneBorderElement,
+        ));
+
+        // Bottom border
+        commands.spawn((
+            Sprite {
+                color: border_color,
+                custom_size: Some(Vec2::new(viewport.width(), border_thickness)),
+                ..default()
+            },
+            Transform::from_translation(Vec3::new(viewport.center().x, viewport.min.y, 0.4)),
+            PaneBorderElement,
+        ));
+
+        // Left border
+        commands.spawn((
+            Sprite {
+                color: border_color,
+                custom_size: Some(Vec2::new(border_thickness, viewport.height())),
+                ..default()
+            },
+            Transform::from_translation(Vec3::new(viewport.min.x, viewport.center().y, 0.4)),
+            PaneBorderElement,
+        ));
+
+        // Right border
+        commands.spawn((
+            Sprite {
+                color: border_color,
+                custom_size: Some(Vec2::new(border_thickness, viewport.height())),
+                ..default()
+            },
+            Transform::from_translation(Vec3::new(viewport.max.x, viewport.center().y, 0.4)),
+            PaneBorderElement,
+        ));
+    }
+}
+
+/// Render resize grips in the gaps between panes
+pub fn render_resize_grips(
+    mut commands: Commands,
+    viewport_state: Res<ViewportState>,
+    pane_manager: Res<PaneManager>,
+    interaction: Res<InteractionState>,
+    query: Query<Entity, With<ResizeGripElement>>,
+) {
+    if !viewport_state.needs_redraw {
+        return;
+    }
+
+    // Despawn existing resize grip elements
+    for entity in query.iter() {
+        commands.entity(entity).despawn();
+    }
+
+    if pane_manager.panes.len() < 2 {
+        return; // Need at least 2 panes to have resize grips
+    }
+
+    // Calculate chart bounds
+    let first_pane = &pane_manager.panes[0];
+    let chart_left = first_pane.space.viewport.min.x;
+    let chart_right = first_pane.space.viewport.max.x;
+    let gap_center_x = (chart_left + chart_right) / 2.0;
+
+    let grip_width = 50.0;
+    let line_height = 2.0;
+    let line_spacing = 4.0;
+
+    // Render resize grips between panes
+    for i in 0..pane_manager.panes.len() - 1 {
+        let pane_bottom = pane_manager.panes[i].space.viewport.min.y;
+        let next_pane_top = pane_manager.panes[i + 1].space.viewport.max.y;
+        let gap_center_y = (pane_bottom + next_pane_top) / 2.0;
+
+        // Highlight grip if hovering or resizing this gap
+        let is_active = interaction.hover_resize_gap == Some(i) || interaction.resizing_gap == Some(i);
+        let grip_color = if is_active {
+            Color::srgba(0.9, 0.9, 0.9, 0.9) // Bright when active
+        } else {
+            Color::srgba(0.6, 0.6, 0.6, 0.7) // Dim when inactive
+        };
+
+        // Draw 2 horizontal lines as grip indicator
+        for j in 0..2 {
+            let offset = (j as f32 - 0.5) * (line_height + line_spacing);
+            let line_y = gap_center_y + offset;
+
+            commands.spawn((
+                Sprite {
+                    color: grip_color,
+                    custom_size: Some(Vec2::new(grip_width, line_height)),
+                    ..default()
+                },
+                Transform::from_translation(Vec3::new(gap_center_x, line_y, 0.6)),
+                ResizeGripElement,
+            ));
+        }
+    }
+}
+
+/// Render axis labels (X-axis time labels and Y-axis price labels)
+pub fn render_axis_labels(
+    mut commands: Commands,
+    viewport_state: Res<ViewportState>,
+    pane_manager: Res<PaneManager>,
+    candle_data: Res<CandleData>,
+    grid: Res<ChartGrid>,
+    axes: Res<ChartAxes>,
+    query: Query<Entity, With<AxisLabelElement>>,
+) {
+    if !viewport_state.needs_redraw {
+        return;
+    }
+
+    // Despawn existing axis label elements
+    for entity in query.iter() {
+        commands.entity(entity).despawn();
+    }
+
+    if pane_manager.panes.is_empty() {
+        return;
+    }
+
+    // Calculate chart bounds
+    let first_pane = &pane_manager.panes[0];
+    let last_pane = &pane_manager.panes[pane_manager.panes.len() - 1];
+    let chart_bottom = last_pane.space.viewport.min.y;
+    let chart_left = first_pane.space.viewport.min.x;
+    let chart_right = first_pane.space.viewport.max.x;
+
+    // ========== Y-AXIS LABELS (per pane, on the right side) ==========
+    if axes.show_y_labels {
+        for pane in &pane_manager.panes {
+            let viewport = &pane.space.viewport;
+
+            for i in 0..=grid.y_tick_count {
+                let value_percent = i as f32 / grid.y_tick_count as f32;
+                let value = pane.space.visible_price_min
+                    + value_percent * (pane.space.visible_price_max - pane.space.visible_price_min);
+                let y = viewport.min.y + value_percent * viewport.height();
+
+                let label_x = chart_right + 50.0;
+                let label_text = format!("{:.2}", value);
+
+                commands.spawn((
+                    Text2d::new(label_text),
+                    TextFont {
+                        font_size: axes.label_size,
+                        ..default()
+                    },
+                    TextColor(axes.label_color),
+                    Transform::from_translation(Vec3::new(label_x, y, 2.0)),
+                    bevy::sprite::Anchor::CENTER_LEFT,
+                    AxisLabelElement,
+                ));
+            }
+        }
+    }
+
+    // ========== X-AXIS TIME LABELS (at bottom of chart) ==========
     if axes.show_x_labels {
         for i in 0..=grid.x_tick_count {
             let candle_percent = i as f32 / grid.x_tick_count as f32;
-            let candle_index = chart.visible_candle_start
-                + (candle_percent * chart.visible_candle_count as f32) as usize;
+            let candle_index = viewport_state.visible_candle_start
+                + (candle_percent * viewport_state.visible_candle_count as f32) as usize;
 
-            if candle_index >= chart.candles.len() {
+            if candle_index >= candle_data.candles.len() {
                 continue;
             }
 
             let x = chart_left + candle_percent * (chart_right - chart_left);
-            let candle = &chart.candles[candle_index];
+            let candle = &candle_data.candles[candle_index];
             let label_y = chart_bottom - 40.0;
 
             // Format timestamp using chrono
@@ -438,7 +535,7 @@ pub fn render_grid_and_axes(
                 TextColor(axes.label_color),
                 Transform::from_translation(Vec3::new(x, label_y, 2.0)),
                 bevy::sprite::Anchor::CENTER,
-                GridElement,
+                AxisLabelElement,
             ));
         }
     }
@@ -446,16 +543,23 @@ pub fn render_grid_and_axes(
 
 pub fn update_crosshair(
     crosshair_entities: Res<CrosshairEntities>,
-    chart: Res<Chart>,
+    candle_data: Res<CandleData>,
+    viewport_state: Res<ViewportState>,
+    pane_manager: Res<PaneManager>,
     crosshair: Res<Crosshair>,
-    mut interaction: ResMut<InteractionState>,
+    mut crosshair_state: ResMut<CrosshairState>,
+    interaction: Res<InteractionState>,
     mut transforms: Query<&mut Transform>,
     mut visibilities: Query<&mut Visibility>,
     mut texts: Query<&mut Text2d>,
     mut cursor_options: Query<&mut CursorOptions>,
 ) {
-    if !crosshair.enabled || chart.panes.is_empty() {
+    // Update crosshair state from interaction
+    crosshair_state.mouse_pos = interaction.mouse_pos;
+
+    if !crosshair.enabled || pane_manager.panes.is_empty() {
         // Hide all crosshair elements and show cursor
+        crosshair_state.visible = false;
         for segment in &crosshair_entities.vertical_line_segments {
             if let Ok(mut vis) = visibilities.get_mut(*segment) {
                 *vis = Visibility::Hidden;
@@ -487,18 +591,13 @@ pub fn update_crosshair(
         return;
     }
 
-    // Calculate total chart bounds (from top of first pane to bottom of last pane)
-    let first_pane = &chart.panes[0];
-    let last_pane = &chart.panes[chart.panes.len() - 1];
-    let chart_top = first_pane.space.viewport.max.y;
-    let chart_bottom = last_pane.space.viewport.min.y;
-    let chart_right = first_pane.space.viewport.max.x;
-
     // Check if mouse is within any pane
-    let mouse_in_chart = chart
+    let mouse_in_chart = pane_manager
         .panes
         .iter()
         .any(|pane| pane.space.viewport.contains(interaction.mouse_pos));
+
+    crosshair_state.visible = mouse_in_chart;
 
     // Show cursor if: outside chart, dragging, or resizing
     // Hide cursor only when: in chart AND not interacting
@@ -553,7 +652,7 @@ pub fn update_crosshair(
     }
 
     // ========== UPDATE PER-PANE HORIZONTAL LINES & LABELS ==========
-    for pane in &chart.panes {
+    for pane in &pane_manager.panes {
         let viewport = &pane.space.viewport;
 
         // Find entities for this pane
@@ -587,8 +686,8 @@ pub fn update_crosshair(
                 if let Some(entity) = label_entity {
                     let (_, value_at_cursor) = pane.space.from_world(
                         interaction.mouse_pos,
-                        chart.visible_candle_start,
-                        chart.visible_candle_count,
+                        viewport_state.visible_candle_start,
+                        viewport_state.visible_candle_count,
                     );
 
                     if let Ok(mut text) = texts.get_mut(entity) {
@@ -624,17 +723,17 @@ pub fn update_crosshair(
     }
 
     // ========== FIND CANDLE AT CURSOR ==========
-    let (candle_index, _) = if let Some(pane) = chart.panes.first() {
+    let (candle_index, _) = if let Some(pane) = pane_manager.panes.first() {
         pane.space.from_world(
             interaction.mouse_pos,
-            chart.visible_candle_start,
-            chart.visible_candle_count,
+            viewport_state.visible_candle_start,
+            viewport_state.visible_candle_count,
         )
     } else {
         return;
     };
 
-    if candle_index >= chart.candles.len() {
+    if candle_index >= candle_data.candles.len() {
         // Hide time label and OHLCV box if no valid candle
         if let Ok(mut vis) = visibilities.get_mut(crosshair_entities.time_label) {
             *vis = Visibility::Hidden;
@@ -642,16 +741,16 @@ pub fn update_crosshair(
         if let Ok(mut vis) = visibilities.get_mut(crosshair_entities.ohlcv_box) {
             *vis = Visibility::Hidden;
         }
-        interaction.last_crosshair_candle_index = None;
+        crosshair_state.hovered_candle = None;
         return;
     }
 
     // ========== DEBOUNCE: Only update text if candle changed ==========
-    let candle_changed = interaction.last_crosshair_candle_index != Some(candle_index);
+    let candle_changed = crosshair_state.hovered_candle != Some(candle_index);
 
     if candle_changed {
-        interaction.last_crosshair_candle_index = Some(candle_index);
-        let candle = &chart.candles[candle_index];
+        crosshair_state.hovered_candle = Some(candle_index);
+        let candle = &candle_data.candles[candle_index];
 
         // ========== UPDATE TIME LABEL (only when candle changes) ==========
         if crosshair.show_time_label {
@@ -686,10 +785,8 @@ pub fn update_crosshair(
         if let Ok(mut vis) = visibilities.get_mut(crosshair_entities.time_label) {
             *vis = Visibility::Visible;
         }
-    } else {
-        if let Ok(mut vis) = visibilities.get_mut(crosshair_entities.time_label) {
-            *vis = Visibility::Hidden;
-        }
+    } else if let Ok(mut vis) = visibilities.get_mut(crosshair_entities.time_label) {
+        *vis = Visibility::Hidden;
     }
 
     // OHLCV box visibility
@@ -697,10 +794,8 @@ pub fn update_crosshair(
         if let Ok(mut vis) = visibilities.get_mut(crosshair_entities.ohlcv_box) {
             *vis = Visibility::Visible;
         }
-    } else {
-        if let Ok(mut vis) = visibilities.get_mut(crosshair_entities.ohlcv_box) {
-            *vis = Visibility::Hidden;
-        }
+    } else if let Ok(mut vis) = visibilities.get_mut(crosshair_entities.ohlcv_box) {
+        *vis = Visibility::Hidden;
     }
 }
 

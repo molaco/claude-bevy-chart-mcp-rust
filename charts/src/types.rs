@@ -464,46 +464,6 @@ impl Pane {
     }
 }
 
-/// Calculate and assign viewports to each pane based on height percentages
-/// Panes are stacked from top to bottom with padding between them
-pub fn calculate_pane_layouts(panes: &mut [Pane], total_area: Rect, visible_candle_count: usize) {
-    if panes.is_empty() {
-        return;
-    }
-
-    const SEPARATOR_GAP: f32 = 24.0; // Padding between panes
-
-    // Calculate total height available after accounting for separators
-    let num_separators = panes.len().saturating_sub(1);
-    let separator_total_height = num_separators as f32 * SEPARATOR_GAP;
-    let available_height = total_area.height() - separator_total_height;
-
-    // Start from the top
-    let mut current_y = total_area.max.y;
-    let num_panes = panes.len();
-
-    for (i, pane) in panes.iter_mut().enumerate() {
-        let pane_height = available_height * pane.height_percent;
-        let pane_min_y = current_y - pane_height;
-        let pane_max_y = current_y;
-
-        // Create viewport for this pane
-        pane.space.viewport = Rect::from_corners(
-            Vec2::new(total_area.min.x, pane_min_y),
-            Vec2::new(total_area.max.x, pane_max_y),
-        );
-
-        // Recalculate cached values
-        pane.space.recalculate_cache(visible_candle_count);
-
-        // Move down for next pane, adding separator gap if not the last pane
-        current_y = pane_min_y;
-        if i < num_panes - 1 {
-            current_y -= SEPARATOR_GAP;
-        }
-    }
-}
-
 /// Moving Average indicator
 #[derive(Debug, Clone)]
 pub struct MovingAverage {
@@ -732,74 +692,11 @@ impl MovingAverage {
         }
     }
 }
-
-/// Main chart resource
-#[derive(Resource)]
-pub struct Chart {
-    pub ticker_id: i32,
-    pub timeframe: String,             // "15m", "1h"
-
-    // Data
-    pub candles: Vec<Candle>,          // Loaded candles (grows as you scroll)
-    pub candle_offset: usize,          // Global offset (for lazy loading)
-
-    // SHARED X-axis state (synchronized across all panes)
-    pub visible_candle_start: usize,
-    pub visible_candle_count: usize,
-
-    // Multi-pane support
-    pub panes: Vec<Pane>,
-    pub total_area: Rect,              // Total chart viewport for resize calculations
-
-    // Coordinate system (DEPRECATED - use panes instead)
-    pub space: ChartSpace,
-
-    // Indicators
-    pub indicators: Vec<MovingAverage>,
-
-    // State
-    pub needs_redraw: bool,
-    pub loading: bool,                 // True when fetching more data
-}
-
 /// Calculate number of "virtual candles" worth of space to add on the right edge
 /// This creates empty space when viewing the latest/newest candles
 /// Returns approximately 1/3 of the visible candle count
 pub fn right_spacing_candles(visible_candle_count: usize) -> usize {
     visible_candle_count / 3
-}
-
-/// Update Y-axis bounds for all panes based on their type
-pub fn update_pane_bounds(chart: &mut Chart) {
-    // Collect shared data to avoid borrow conflicts
-    let candles = &chart.candles;
-    let indicators = &chart.indicators;
-    let visible_start = chart.visible_candle_start;
-    let visible_count = chart.visible_candle_count;
-
-    for pane in chart.panes.iter_mut() {
-        match pane.pane_type {
-            PaneType::Price => {
-                // Use Option B: expand Y-axis to include indicator values
-                pane.space.fit_price_bounds_with_indicators(
-                    candles,
-                    indicators,
-                    visible_start,
-                    visible_count
-                );
-            }
-            PaneType::Volume => {
-                pane.space.fit_volume_bounds(
-                    candles,
-                    visible_start,
-                    visible_count
-                );
-            }
-            PaneType::Indicator { .. } => {
-                // TODO: Handle indicators when implemented
-            }
-        }
-    }
 }
 
 /// Database connection resource (wrapped in Arc<Mutex> for Send + Sync)
@@ -970,6 +867,15 @@ impl Default for Crosshair {
     }
 }
 
+/// Crosshair state resource - tracks crosshair position and visibility
+#[derive(Resource, Default)]
+pub struct CrosshairState {
+    pub visible: bool,
+    pub mouse_pos: Vec2,
+    pub hovered_candle: Option<usize>,
+    pub last_update_pos: Vec2,
+}
+
 /// Chart color theme
 #[derive(Resource, Clone)]
 pub struct ChartColors {
@@ -1035,9 +941,25 @@ pub struct VolumeElement;
 #[derive(Component)]
 pub struct IndicatorElement;
 
-/// Marker component for grid elements (lines and labels)
+/// Marker component for grid elements (lines and labels) - LEGACY, prefer specific markers
 #[derive(Component)]
 pub struct GridElement;
+
+/// Marker component for grid lines only (horizontal and vertical)
+#[derive(Component)]
+pub struct GridLineElement;
+
+/// Marker component for pane border elements
+#[derive(Component)]
+pub struct PaneBorderElement;
+
+/// Marker component for resize grip elements (between panes)
+#[derive(Component)]
+pub struct ResizeGripElement;
+
+/// Marker component for axis label elements (X and Y axis)
+#[derive(Component)]
+pub struct AxisLabelElement;
 
 /// Marker component for crosshair elements
 #[derive(Component)]

@@ -82,14 +82,19 @@ fn main() {
                 .in_set(ChartSystems::StateUpdate),
         )
         // Rendering systems - draw based on current state
+        // Split grid rendering into focused systems for better parallelization
         .add_systems(
             Update,
             (
-                render_grid_and_axes,
+                // Grid systems can run in parallel (no dependencies between them)
+                render_grid_lines,
+                render_pane_borders,
+                render_resize_grips,
+                render_axis_labels,
+                // Then render data elements
                 render_moving_averages,
                 render_volume_bars,
             )
-                .chain()  // Run in sequence for consistent rendering order
                 .in_set(ChartSystems::Rendering),
         )
         // Cleanup systems - reset flags after rendering
@@ -195,41 +200,23 @@ fn setup(mut commands: Commands) {
         visible_candle_count,
     );
 
-    // === LEGACY: Keep old Chart resource for backward compatibility during migration ===
-    // TODO: Remove after all systems are migrated to use new resources
-    let space = ChartSpace::new(total_area, visible_candle_count);
-    let chart = Chart {
-        ticker_id,
-        timeframe: timeframe.to_string(),
-        candles,
-        candle_offset: 0,
-        visible_candle_start,
-        visible_candle_count,
-        panes: pane_manager.panes.clone(),
-        total_area,
-        space,
-        indicators: indicator_state.indicators.clone(),
-        needs_redraw: true,
-        loading: false,
-    };
+    // Initialize persistent crosshair entities
+    init_crosshair(&mut commands, &pane_manager);
 
-    // Initialize persistent crosshair entities (needs chart reference)
-    init_crosshair(&mut commands, &chart);
-
-    // Insert new separated resources
+    // Insert separated resources
     commands.insert_resource(candle_data);
     commands.insert_resource(chart_metadata);
     commands.insert_resource(viewport_state);
     commands.insert_resource(indicator_state);
     commands.insert_resource(pane_manager);
 
-    // Insert legacy Chart resource (for backward compatibility during migration)
+    // Insert other resources
     commands.insert_resource(db);
-    commands.insert_resource(chart);
     commands.insert_resource(InteractionState::default());
     commands.insert_resource(ChartGrid::default());
     commands.insert_resource(ChartAxes::default());
     commands.insert_resource(Crosshair::default());
+    commands.insert_resource(CrosshairState::default());
     commands.insert_resource(VolumeToggleState::default());
     commands.insert_resource(ScreenshotCounter::default());
     commands.insert_resource(ChartColors::default());
@@ -244,10 +231,7 @@ fn setup(mut commands: Commands) {
 
 /// Reset the redraw flag after all rendering systems have completed
 /// This prevents unnecessary entity despawn/spawn on every frame
-fn reset_redraw_flag(mut chart: ResMut<Chart>, mut viewport_state: ResMut<ViewportState>) {
-    if chart.needs_redraw {
-        chart.needs_redraw = false;
-    }
+fn reset_redraw_flag(mut viewport_state: ResMut<ViewportState>) {
     if viewport_state.needs_redraw {
         viewport_state.needs_redraw = false;
     }
