@@ -1,6 +1,7 @@
 use bevy::prelude::*;
 use bevy::input::mouse::MouseWheel;
 use bevy::window::{CursorIcon, SystemCursorIcon};
+use crate::config::InteractionConfig;
 use crate::types::{
     CandleData, ChartDatabase, ChartMetadata, IndicatorState, InteractionState,
     MovingAverage, Pane, PaneId, PaneManager, PaneType, ViewportState, VolumeToggleState,
@@ -18,6 +19,7 @@ pub fn handle_mouse_input(
     mut pane_manager: ResMut<PaneManager>,
     indicator_state: Res<IndicatorState>,
     mut interaction: ResMut<InteractionState>,
+    interaction_config: Res<InteractionConfig>,
     mouse_button: Res<ButtonInput<MouseButton>>,
     #[allow(deprecated)] mut mouse_wheel: EventReader<MouseWheel>,
     window_query: Query<(Entity, &Window)>,
@@ -93,9 +95,9 @@ pub fn handle_mouse_input(
         let orig_above = interaction.resize_start_heights[gap_idx];
         let orig_below = interaction.resize_start_heights[gap_idx + 1];
 
-        // Calculate new heights with constraints
-        let new_above = (orig_above + delta_percent).clamp(0.1, 0.9);
-        let new_below = (orig_below - delta_percent).clamp(0.1, 0.9);
+        // Calculate new heights with constraints from config
+        let new_above = (orig_above + delta_percent).clamp(interaction_config.min_pane_height, interaction_config.max_pane_height);
+        let new_below = (orig_below - delta_percent).clamp(interaction_config.min_pane_height, interaction_config.max_pane_height);
 
         // Check if both constraints are satisfied
         let total_change = (new_above - orig_above).abs() + (new_below - orig_below).abs();
@@ -165,7 +167,11 @@ pub fn handle_mouse_input(
     // Zoom: Mouse wheel
     for event in mouse_wheel.read() {
         if mouse_in_pane && !pane_manager.panes.is_empty() {
-            let zoom_factor = if event.y > 0.0 { 0.9 } else { 1.1 };
+            let zoom_factor = if event.y > 0.0 {
+                interaction_config.zoom_in_factor
+            } else {
+                interaction_config.zoom_out_factor
+            };
 
             // Calculate focus candle using first pane
             let (focus_candle, _) = pane_manager.panes[0].space.from_world(
@@ -176,8 +182,10 @@ pub fn handle_mouse_input(
 
             // Update shared X-axis state (zoom)
             let old_count = viewport_state.visible_candle_count;
-            let new_count = ((old_count as f32 * zoom_factor).clamp(10.0, 10000.0) as usize)
-                .min(candle_data.candles.len());
+            let new_count = ((old_count as f32 * zoom_factor).clamp(
+                interaction_config.min_visible_candles,
+                interaction_config.max_visible_candles
+            ) as usize).min(candle_data.candles.len());
 
             let focus_offset = focus_candle.saturating_sub(viewport_state.visible_candle_start);
             let focus_percent = focus_offset as f32 / old_count as f32;
@@ -212,6 +220,7 @@ pub fn check_lazy_load(
     mut viewport_state: ResMut<ViewportState>,
     mut indicator_state: ResMut<IndicatorState>,
     chart_metadata: Res<ChartMetadata>,
+    interaction_config: Res<InteractionConfig>,
     db: Res<ChartDatabase>,
 ) {
     if viewport_state.loading {
@@ -222,10 +231,10 @@ pub fn check_lazy_load(
     let end_idx = start_idx + viewport_state.visible_candle_count;
 
     // Load more historical data when scrolling left
-    if start_idx < 20 && candle_data.candles.first().is_some() {
+    if start_idx < interaction_config.lazy_load_threshold && candle_data.candles.first().is_some() {
         viewport_state.loading = true;
 
-        let load_count = 100;
+        let load_count = interaction_config.lazy_load_batch_size;
         let load_end_time = candle_data.candles.first().unwrap().time;
 
         // Calculate start time based on timeframe
@@ -272,12 +281,12 @@ pub fn check_lazy_load(
     }
 
     // Load more recent data when scrolling right
-    if end_idx > candle_data.candles.len().saturating_sub(20) && candle_data.candles.last().is_some() {
+    if end_idx > candle_data.candles.len().saturating_sub(interaction_config.lazy_load_threshold) && candle_data.candles.last().is_some() {
         viewport_state.loading = true;
 
         let load_start_time = candle_data.candles.last().unwrap().time;
         let interval_ms = chart_metadata.interval_ms();
-        let load_end_time = load_start_time + (100 * interval_ms);
+        let load_end_time = load_start_time + (interaction_config.lazy_load_batch_size * interval_ms);
 
         if let Ok(new_candles) = db.load_candles(
             chart_metadata.ticker_id,
@@ -324,7 +333,10 @@ pub fn toggle_volume_pane(
     mut viewport_state: ResMut<ViewportState>,
     mut pane_manager: ResMut<PaneManager>,
     indicator_state: Res<IndicatorState>,
+    interaction_config: Res<InteractionConfig>,
 ) {
+    use crate::config;
+
     if keys.just_pressed(KeyCode::KeyV) {
         toggle_state.visible = !toggle_state.visible;
 
@@ -333,19 +345,19 @@ pub fn toggle_volume_pane(
             let has_volume = pane_manager.panes.iter().any(|p| matches!(p.id, PaneId::Volume));
 
             if !has_volume {
-                // Insert volume pane after price pane
+                // Insert volume pane after price pane (using config for default height)
                 let volume_pane = Pane::new(
                     PaneId::Volume,
                     PaneType::Volume,
-                    0.3,  // 30% height
+                    interaction_config.default_volume_pane_height,
                     Rect::default(),
                     viewport_state.visible_candle_count,
                 );
                 pane_manager.panes.push(volume_pane);
 
-                // Adjust price pane height to 70%
+                // Adjust price pane height (using config for default height)
                 if let Some(price_pane) = pane_manager.find_pane_mut(PaneId::Price) {
-                    price_pane.height_percent = 0.7;
+                    price_pane.height_percent = interaction_config.default_price_pane_height;
                 }
 
                 println!("Volume pane shown");
@@ -356,7 +368,7 @@ pub fn toggle_volume_pane(
 
             // Give price pane 100% height
             if let Some(price_pane) = pane_manager.find_pane_mut(PaneId::Price) {
-                price_pane.height_percent = 1.0;
+                price_pane.height_percent = config::FULL_PANE_HEIGHT;
             }
 
             println!("Volume pane hidden");

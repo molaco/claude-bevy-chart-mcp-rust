@@ -565,7 +565,7 @@ fn extract_candles_instanced(
     // Calculate candle width and body width (use visible_candle_count like old system)
     let visible_count = viewport_state.visible_candle_count;
     let candle_width = viewport.width() / visible_count.max(1) as f32;
-    let body_width = candle_width * 0.7; // 70% for body (same as old system)
+    let body_width = candle_width * crate::config::CANDLE_BODY_WIDTH_RATIO;
 
     // Coordinate transformation functions (match ChartSpace::to_world exactly)
     let price_to_y = |price: f64| -> f32 {

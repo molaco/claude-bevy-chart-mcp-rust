@@ -1,3 +1,4 @@
+use crate::config::{ChartDimensions, ChartTheme, ZLayerConfig};
 use crate::types::*;
 use bevy::prelude::*;
 use bevy::window::CursorOptions;
@@ -12,6 +13,9 @@ pub fn render_volume_bars(
     viewport: Res<ViewportState>,
     pane_manager: Res<PaneManager>,
     candle_data: Res<CandleData>,
+    theme: Res<ChartTheme>,
+    dimensions: Res<ChartDimensions>,
+    z_layers: Res<ZLayerConfig>,
     query: Query<Entity, With<VolumeElement>>,
 ) {
     if !viewport.needs_redraw {
@@ -58,14 +62,14 @@ pub fn render_volume_bars(
             (bar_bottom.x + bar_top.x) / 2.0,
             (bar_bottom.y + bar_top.y) / 2.0,
         );
-        let bar_height = (bar_top.y - bar_bottom.y).abs().max(1.0);
-        let bar_width = volume_pane.space.candle_width_px * 0.7;
+        let bar_height = (bar_top.y - bar_bottom.y).abs().max(dimensions.min_element_height);
+        let bar_width = volume_pane.space.candle_width_px * dimensions.body_width_ratio;
 
-        // Color based on candle direction
+        // Color based on candle direction (using theme colors)
         let bar_color = if candle.close >= candle.open {
-            Color::srgba(0.0, 0.8, 0.2, 0.6) // Green with transparency
+            theme.bull_volume
         } else {
-            Color::srgba(0.9, 0.2, 0.2, 0.6) // Red with transparency
+            theme.bear_volume
         };
 
         commands.spawn((
@@ -74,7 +78,7 @@ pub fn render_volume_bars(
                 custom_size: Some(Vec2::new(bar_width, bar_height)),
                 ..default()
             },
-            Transform::from_translation(bar_center.extend(0.0)),
+            Transform::from_translation(bar_center.extend(z_layers.volume)),
             VolumeBar { candle_index: i },
             VolumeElement,
             PaneId::Volume,
@@ -90,7 +94,10 @@ pub fn render_volume_bars(
 }
 
 /// Initialize persistent crosshair entities (called once at startup from setup)
+/// Note: This is called from setup before config resources are inserted, so we use constants directly
 pub fn init_crosshair(commands: &mut Commands, pane_manager: &PaneManager) {
+    use crate::config;
+
     let mut horizontal_lines = Vec::new();
     let mut price_labels = Vec::new();
 
@@ -106,25 +113,27 @@ pub fn init_crosshair(commands: &mut Commands, pane_manager: &PaneManager) {
     let chart_right = first_pane.space.viewport.max.x;
     let total_height = chart_top - chart_bottom;
 
-    // Dash pattern parameters
-    const DASH_LENGTH: f32 = 8.0;
-    const GAP_LENGTH: f32 = 4.0;
-    const PATTERN_LENGTH: f32 = DASH_LENGTH + GAP_LENGTH;
+    // Dash pattern parameters from config
+    let dash_length = config::CROSSHAIR_DASH_LENGTH;
+    let gap_length = config::CROSSHAIR_GAP_LENGTH;
+    let pattern_length = dash_length + gap_length;
+    let crosshair_line_color = Color::srgba(1.0, 1.0, 1.0, config::CROSSHAIR_LINE_ALPHA);
+    let crosshair_label_color = Color::srgb(1.0, 1.0, 0.0); // Yellow
 
     // Spawn vertical line segments (dashed pattern)
-    let num_segments = (total_height / PATTERN_LENGTH).ceil() as usize;
+    let num_segments = (total_height / pattern_length).ceil() as usize;
     let mut vertical_line_segments = Vec::new();
 
     for i in 0..num_segments {
-        let segment_y = chart_bottom + (i as f32 * PATTERN_LENGTH) + (DASH_LENGTH / 2.0);
+        let segment_y = chart_bottom + (i as f32 * pattern_length) + (dash_length / 2.0);
         let segment_id = commands
             .spawn((
                 Sprite {
-                    color: Color::srgba(1.0, 1.0, 1.0, 0.6),
-                    custom_size: Some(Vec2::new(1.0, DASH_LENGTH)),
+                    color: crosshair_line_color,
+                    custom_size: Some(Vec2::new(config::CROSSHAIR_LINE_THICKNESS, dash_length)),
                     ..default()
                 },
-                Transform::from_translation(Vec3::new(0.0, segment_y, 3.0)),
+                Transform::from_translation(Vec3::new(0.0, segment_y, config::Z_LAYER_CROSSHAIR_LINES)),
                 Visibility::Hidden,
                 CrosshairElement,
             ))
@@ -138,19 +147,19 @@ pub fn init_crosshair(commands: &mut Commands, pane_manager: &PaneManager) {
 
         // Horizontal line segments for this pane (dashed pattern)
         let pane_width = viewport.width();
-        let num_h_segments = (pane_width / PATTERN_LENGTH).ceil() as usize;
+        let num_h_segments = (pane_width / pattern_length).ceil() as usize;
         let mut h_segments = Vec::new();
 
         for i in 0..num_h_segments {
-            let segment_x = viewport.min.x + (i as f32 * PATTERN_LENGTH) + (DASH_LENGTH / 2.0);
+            let segment_x = viewport.min.x + (i as f32 * pattern_length) + (dash_length / 2.0);
             let segment_id = commands
                 .spawn((
                     Sprite {
-                        color: Color::srgba(1.0, 1.0, 1.0, 0.6),
-                        custom_size: Some(Vec2::new(DASH_LENGTH, 1.0)),
+                        color: crosshair_line_color,
+                        custom_size: Some(Vec2::new(dash_length, config::CROSSHAIR_LINE_THICKNESS)),
                         ..default()
                     },
-                    Transform::from_translation(Vec3::new(segment_x, 0.0, 3.0)),
+                    Transform::from_translation(Vec3::new(segment_x, 0.0, config::Z_LAYER_CROSSHAIR_LINES)),
                     Visibility::Hidden,
                     CrosshairElement,
                 ))
@@ -164,11 +173,11 @@ pub fn init_crosshair(commands: &mut Commands, pane_manager: &PaneManager) {
             .spawn((
                 Text2d::new(""),
                 TextFont {
-                    font_size: 14.0,
+                    font_size: config::CROSSHAIR_LABEL_FONT_SIZE,
                     ..default()
                 },
-                TextColor(Color::srgb(1.0, 1.0, 0.0)),
-                Transform::from_translation(Vec3::new(chart_right + 50.0, 0.0, 4.0)),
+                TextColor(crosshair_label_color),
+                Transform::from_translation(Vec3::new(chart_right + config::PRICE_LABEL_OFFSET_X, 0.0, config::Z_LAYER_CROSSHAIR_LABELS)),
                 bevy::sprite::Anchor::CENTER_LEFT,
                 Visibility::Hidden,
                 CrosshairElement,
@@ -182,11 +191,11 @@ pub fn init_crosshair(commands: &mut Commands, pane_manager: &PaneManager) {
         .spawn((
             Text2d::new(""),
             TextFont {
-                font_size: 14.0,
+                font_size: config::CROSSHAIR_LABEL_FONT_SIZE,
                 ..default()
             },
-            TextColor(Color::srgb(1.0, 1.0, 0.0)),
-            Transform::from_translation(Vec3::new(0.0, chart_bottom - 40.0, 4.0)),
+            TextColor(crosshair_label_color),
+            Transform::from_translation(Vec3::new(0.0, chart_bottom - config::TIME_LABEL_OFFSET_Y, config::Z_LAYER_CROSSHAIR_LABELS)),
             bevy::sprite::Anchor::CENTER,
             Visibility::Hidden,
             CrosshairElement,
@@ -198,14 +207,14 @@ pub fn init_crosshair(commands: &mut Commands, pane_manager: &PaneManager) {
         .spawn((
             Text2d::new(""),
             TextFont {
-                font_size: 16.0,
+                font_size: config::OHLCV_BOX_FONT_SIZE,
                 ..default()
             },
-            TextColor(Color::srgb(1.0, 1.0, 1.0)),
+            TextColor(Color::srgb(1.0, 1.0, 1.0)), // White
             Transform::from_translation(Vec3::new(
-                first_pane.space.viewport.min.x + 100.0,
-                first_pane.space.viewport.max.y - 40.0,
-                4.0,
+                first_pane.space.viewport.min.x + config::OHLCV_BOX_OFFSET_X,
+                first_pane.space.viewport.max.y - config::OHLCV_BOX_OFFSET_Y,
+                config::Z_LAYER_CROSSHAIR_LABELS,
             )),
             bevy::sprite::Anchor::TOP_LEFT,
             Visibility::Hidden,
@@ -236,8 +245,11 @@ pub fn render_grid_lines(
     pane_manager: Res<PaneManager>,
     candle_data: Res<CandleData>,
     grid: Res<ChartGrid>,
+    z_layers: Res<ZLayerConfig>,
     query: Query<Entity, With<GridLineElement>>,
 ) {
+    use crate::config;
+
     if !viewport_state.needs_redraw {
         return;
     }
@@ -271,10 +283,10 @@ pub fn render_grid_lines(
             commands.spawn((
                 Sprite {
                     color: grid.grid_color,
-                    custom_size: Some(Vec2::new(line_width, 1.0)),
+                    custom_size: Some(Vec2::new(line_width, config::GRID_LINE_THICKNESS)),
                     ..default()
                 },
-                Transform::from_translation(line_center.extend(-1.0)),
+                Transform::from_translation(line_center.extend(z_layers.grid)),
                 GridLineElement,
             ));
         }
@@ -302,10 +314,10 @@ pub fn render_grid_lines(
             commands.spawn((
                 Sprite {
                     color: grid.grid_color,
-                    custom_size: Some(Vec2::new(1.0, line_height)),
+                    custom_size: Some(Vec2::new(config::GRID_LINE_THICKNESS, line_height)),
                     ..default()
                 },
-                Transform::from_translation(line_center.extend(-1.0)),
+                Transform::from_translation(line_center.extend(z_layers.grid)),
                 GridLineElement,
             ));
         }
@@ -317,6 +329,9 @@ pub fn render_pane_borders(
     mut commands: Commands,
     viewport_state: Res<ViewportState>,
     pane_manager: Res<PaneManager>,
+    theme: Res<ChartTheme>,
+    dimensions: Res<ChartDimensions>,
+    z_layers: Res<ZLayerConfig>,
     query: Query<Entity, With<PaneBorderElement>>,
 ) {
     if !viewport_state.needs_redraw {
@@ -332,8 +347,8 @@ pub fn render_pane_borders(
         return;
     }
 
-    let border_color = Color::srgba(0.5, 0.5, 0.5, 0.6);
-    let border_thickness = 2.0;
+    let border_color = theme.pane_border;
+    let border_thickness = dimensions.border_thickness;
 
     for pane in &pane_manager.panes {
         let viewport = &pane.space.viewport;
@@ -345,7 +360,7 @@ pub fn render_pane_borders(
                 custom_size: Some(Vec2::new(viewport.width(), border_thickness)),
                 ..default()
             },
-            Transform::from_translation(Vec3::new(viewport.center().x, viewport.max.y, 0.4)),
+            Transform::from_translation(Vec3::new(viewport.center().x, viewport.max.y, z_layers.pane_borders)),
             PaneBorderElement,
         ));
 
@@ -356,7 +371,7 @@ pub fn render_pane_borders(
                 custom_size: Some(Vec2::new(viewport.width(), border_thickness)),
                 ..default()
             },
-            Transform::from_translation(Vec3::new(viewport.center().x, viewport.min.y, 0.4)),
+            Transform::from_translation(Vec3::new(viewport.center().x, viewport.min.y, z_layers.pane_borders)),
             PaneBorderElement,
         ));
 
@@ -367,7 +382,7 @@ pub fn render_pane_borders(
                 custom_size: Some(Vec2::new(border_thickness, viewport.height())),
                 ..default()
             },
-            Transform::from_translation(Vec3::new(viewport.min.x, viewport.center().y, 0.4)),
+            Transform::from_translation(Vec3::new(viewport.min.x, viewport.center().y, z_layers.pane_borders)),
             PaneBorderElement,
         ));
 
@@ -378,7 +393,7 @@ pub fn render_pane_borders(
                 custom_size: Some(Vec2::new(border_thickness, viewport.height())),
                 ..default()
             },
-            Transform::from_translation(Vec3::new(viewport.max.x, viewport.center().y, 0.4)),
+            Transform::from_translation(Vec3::new(viewport.max.x, viewport.center().y, z_layers.pane_borders)),
             PaneBorderElement,
         ));
     }
@@ -390,6 +405,9 @@ pub fn render_resize_grips(
     viewport_state: Res<ViewportState>,
     pane_manager: Res<PaneManager>,
     interaction: Res<InteractionState>,
+    theme: Res<ChartTheme>,
+    dimensions: Res<ChartDimensions>,
+    z_layers: Res<ZLayerConfig>,
     query: Query<Entity, With<ResizeGripElement>>,
 ) {
     if !viewport_state.needs_redraw {
@@ -411,9 +429,9 @@ pub fn render_resize_grips(
     let chart_right = first_pane.space.viewport.max.x;
     let gap_center_x = (chart_left + chart_right) / 2.0;
 
-    let grip_width = 50.0;
-    let line_height = 2.0;
-    let line_spacing = 4.0;
+    let grip_width = dimensions.resize_grip_width;
+    let line_height = dimensions.resize_grip_line_height;
+    let line_spacing = dimensions.resize_grip_line_spacing;
 
     // Render resize grips between panes
     for i in 0..pane_manager.panes.len() - 1 {
@@ -424,9 +442,9 @@ pub fn render_resize_grips(
         // Highlight grip if hovering or resizing this gap
         let is_active = interaction.hover_resize_gap == Some(i) || interaction.resizing_gap == Some(i);
         let grip_color = if is_active {
-            Color::srgba(0.9, 0.9, 0.9, 0.9) // Bright when active
+            theme.resize_grip_active
         } else {
-            Color::srgba(0.6, 0.6, 0.6, 0.7) // Dim when inactive
+            theme.resize_grip_inactive
         };
 
         // Draw 2 horizontal lines as grip indicator
@@ -440,7 +458,7 @@ pub fn render_resize_grips(
                     custom_size: Some(Vec2::new(grip_width, line_height)),
                     ..default()
                 },
-                Transform::from_translation(Vec3::new(gap_center_x, line_y, 0.6)),
+                Transform::from_translation(Vec3::new(gap_center_x, line_y, z_layers.resize_grips)),
                 ResizeGripElement,
             ));
         }
@@ -455,6 +473,8 @@ pub fn render_axis_labels(
     candle_data: Res<CandleData>,
     grid: Res<ChartGrid>,
     axes: Res<ChartAxes>,
+    dimensions: Res<ChartDimensions>,
+    z_layers: Res<ZLayerConfig>,
     query: Query<Entity, With<AxisLabelElement>>,
 ) {
     if !viewport_state.needs_redraw {
@@ -488,17 +508,17 @@ pub fn render_axis_labels(
                     + value_percent * (pane.space.visible_price_max - pane.space.visible_price_min);
                 let y = viewport.min.y + value_percent * viewport.height();
 
-                let label_x = chart_right + 50.0;
+                let label_x = chart_right + dimensions.price_label_offset_x;
                 let label_text = format!("{:.2}", value);
 
                 commands.spawn((
                     Text2d::new(label_text),
                     TextFont {
-                        font_size: axes.label_size,
+                        font_size: dimensions.axis_label_font_size,
                         ..default()
                     },
                     TextColor(axes.label_color),
-                    Transform::from_translation(Vec3::new(label_x, y, 2.0)),
+                    Transform::from_translation(Vec3::new(label_x, y, z_layers.axis_labels)),
                     bevy::sprite::Anchor::CENTER_LEFT,
                     AxisLabelElement,
                 ));
@@ -519,7 +539,7 @@ pub fn render_axis_labels(
 
             let x = chart_left + candle_percent * (chart_right - chart_left);
             let candle = &candle_data.candles[candle_index];
-            let label_y = chart_bottom - 40.0;
+            let label_y = chart_bottom - dimensions.time_label_offset_y;
 
             // Format timestamp using chrono
             let datetime =
@@ -529,11 +549,11 @@ pub fn render_axis_labels(
             commands.spawn((
                 Text2d::new(label_text),
                 TextFont {
-                    font_size: axes.label_size,
+                    font_size: dimensions.axis_label_font_size,
                     ..default()
                 },
                 TextColor(axes.label_color),
-                Transform::from_translation(Vec3::new(x, label_y, 2.0)),
+                Transform::from_translation(Vec3::new(x, label_y, z_layers.axis_labels)),
                 bevy::sprite::Anchor::CENTER,
                 AxisLabelElement,
             ));

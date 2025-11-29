@@ -51,7 +51,7 @@ impl Default for ViewportState {
     fn default() -> Self {
         Self {
             visible_candle_start: 0,
-            visible_candle_count: 50,
+            visible_candle_count: crate::config::DEFAULT_VISIBLE_CANDLES,
             total_area: Rect::default(),
             needs_redraw: true,
             loading: false,
@@ -70,7 +70,7 @@ impl Default for PaneManager {
     fn default() -> Self {
         Self {
             panes: Vec::new(),
-            separator_gap: 24.0,
+            separator_gap: crate::config::PANE_SEPARATOR_GAP,
         }
     }
 }
@@ -79,7 +79,14 @@ impl PaneManager {
     pub fn new(panes: Vec<Pane>) -> Self {
         Self {
             panes,
-            separator_gap: 24.0,
+            separator_gap: crate::config::PANE_SEPARATOR_GAP,
+        }
+    }
+
+    pub fn new_with_gap(panes: Vec<Pane>, separator_gap: f32) -> Self {
+        Self {
+            panes,
+            separator_gap,
         }
     }
 
@@ -259,7 +266,7 @@ impl ChartSpace {
         let mut space = Self {
             visible_price_min: 0.0,
             visible_price_max: 100.0,
-            price_padding: 0.05,
+            price_padding: crate::config::PRICE_PADDING_PERCENT,
             viewport,
             candle_width_px: 0.0,
             price_scale: 0.0,
@@ -424,7 +431,7 @@ impl ChartSpace {
 
 impl Default for ChartSpace {
     fn default() -> Self {
-        Self::new(Rect::default(), 50)
+        Self::new(Rect::default(), crate::config::DEFAULT_VISIBLE_CANDLES)
     }
 }
 
@@ -818,9 +825,9 @@ impl Default for ChartGrid {
     fn default() -> Self {
         Self {
             show_grid: true,
-            grid_color: Color::srgba(0.3, 0.3, 0.3, 0.3),
-            y_tick_count: 8,
-            x_tick_count: 10,
+            grid_color: Color::srgba(0.3, 0.3, 0.3, crate::config::GRID_LINE_ALPHA),
+            y_tick_count: crate::config::DEFAULT_Y_TICK_COUNT,
+            x_tick_count: crate::config::DEFAULT_X_TICK_COUNT,
         }
     }
 }
@@ -840,7 +847,7 @@ impl Default for ChartAxes {
             show_x_labels: true,
             show_y_labels: true,
             label_color: Color::srgb(0.8, 0.8, 0.8),
-            label_size: 16.0,
+            label_size: crate::config::AXIS_LABEL_FONT_SIZE,
         }
     }
 }
@@ -859,7 +866,7 @@ impl Default for Crosshair {
     fn default() -> Self {
         Self {
             enabled: true,
-            line_color: Color::srgba(1.0, 1.0, 1.0, 0.5),
+            line_color: Color::srgba(1.0, 1.0, 1.0, crate::config::CROSSHAIR_LINE_ALPHA),
             show_ohlcv_box: true,
             show_price_label: true,
             show_time_label: true,
@@ -886,10 +893,12 @@ pub struct ChartColors {
 
 impl Default for ChartColors {
     fn default() -> Self {
+        // Use theme colors as the source of truth
+        let theme = crate::config::ChartTheme::default();
         Self {
-            bull_candle: Color::srgb(0.0, 0.8, 0.2),  // Green
-            bear_candle: Color::srgb(0.9, 0.2, 0.2),  // Red
-            wick: Color::srgb(0.5, 0.5, 0.5),         // Gray
+            bull_candle: theme.bull_candle,
+            bear_candle: theme.bear_candle,
+            wick: theme.wick,
         }
     }
 }

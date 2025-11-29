@@ -1,3 +1,4 @@
+mod config;
 mod interaction;
 mod rendering;
 mod types;
@@ -6,6 +7,7 @@ use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
 use bevy::prelude::*;
 use bevy::render::view::screenshot::{save_to_disk, Screenshot};
 use bevy::window::{PresentMode, WindowResolution};
+use config::{ChartDimensions, ChartTheme, InteractionConfig, ZLayerConfig};
 use interaction::*;
 use rendering::*;
 use rendering::{CandlestickInstancedPlugin, InstancingEnabled};
@@ -35,11 +37,14 @@ pub enum ChartSystems {
 // ============================================================================
 
 fn main() {
+    // Load dimensions config for window setup
+    let dimensions = ChartDimensions::default();
+
     App::new()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: "Bevy Candlestick Chart".to_string(),
-                resolution: WindowResolution::new(1600, 900),
+                resolution: WindowResolution::new(dimensions.window_width as u32, dimensions.window_height as u32),
                 present_mode: PresentMode::AutoNoVsync, // Disable VSync for uncapped FPS
                 ..default()
             }),
@@ -57,9 +62,9 @@ fn main() {
                 ChartSystems::Cleanup.after(ChartSystems::Rendering),
             ),
         )
-        // Startup systems
+        // Startup systems (setup must run first to insert config resources)
         .add_systems(Startup, setup)
-        .add_systems(Startup, setup_fps_counter)
+        .add_systems(Startup, setup_fps_counter.after(setup))
         // Input systems - handle user interaction first
         .add_systems(
             Update,
@@ -109,6 +114,12 @@ fn main() {
 // ============================================================================
 
 fn setup(mut commands: Commands) {
+    // Load configuration resources
+    let theme = ChartTheme::default();
+    let dimensions = ChartDimensions::default();
+    let interaction_config = InteractionConfig::default();
+    let z_layers = ZLayerConfig::default();
+
     // Spawn camera
     commands.spawn(Camera2d);
 
@@ -134,13 +145,12 @@ fn setup(mut commands: Commands) {
     println!("Loaded {} candles", candles.len());
 
     // Total chart area (leave room for axes labels)
-    // Window is 1600x900, but we need margins for labels
     let total_area = Rect::from_center_size(
-        Vec2::new(-40.0, 10.0),   // Offset left and up slightly
-        Vec2::new(1400.0, 780.0), // Smaller than window to leave room for labels
+        Vec2::new(dimensions.chart_area_offset_x, dimensions.chart_area_offset_y),
+        Vec2::new(dimensions.chart_area_width, dimensions.chart_area_height),
     );
 
-    let visible_candle_count = 50.min(candles.len());
+    let visible_candle_count = interaction_config.default_visible_candles.min(candles.len());
     let spacing = right_spacing_candles(visible_candle_count);
     let visible_candle_start = (candles.len() + spacing).saturating_sub(visible_candle_count);
 
@@ -164,30 +174,33 @@ fn setup(mut commands: Commands) {
         loading: false,
     };
 
-    // IndicatorState resource
+    // IndicatorState resource (using theme colors for indicators)
     let indicator_state = IndicatorState::new(vec![
-        MovingAverage::new_sma(&candles, 20, Color::srgb(1.0, 0.8, 0.0)), // Yellow SMA-20
-        MovingAverage::new_sma(&candles, 50, Color::srgb(0.0, 1.0, 1.0)), // Cyan SMA-50
-        MovingAverage::new_sma(&candles, 200, Color::srgb(1.0, 0.0, 1.0)), // Magenta SMA-200
+        MovingAverage::new_sma(&candles, config::DEFAULT_SMA_SHORT_PERIOD, theme.sma_short),
+        MovingAverage::new_sma(&candles, config::DEFAULT_SMA_MEDIUM_PERIOD, theme.sma_medium),
+        MovingAverage::new_sma(&candles, config::DEFAULT_SMA_LONG_PERIOD, theme.sma_long),
     ]);
 
-    // PaneManager resource
-    let mut pane_manager = PaneManager::new(vec![
-        Pane::new(
-            PaneId::Price,
-            PaneType::Price,
-            0.7,             // 70% of chart height
-            Rect::default(), // Will be calculated by calculate_layouts
-            visible_candle_count,
-        ),
-        Pane::new(
-            PaneId::Volume,
-            PaneType::Volume,
-            0.3,             // 30% of chart height
-            Rect::default(), // Will be calculated by calculate_layouts
-            visible_candle_count,
-        ),
-    ]);
+    // PaneManager resource (using config for default heights)
+    let mut pane_manager = PaneManager::new_with_gap(
+        vec![
+            Pane::new(
+                PaneId::Price,
+                PaneType::Price,
+                interaction_config.default_price_pane_height,
+                Rect::default(), // Will be calculated by calculate_layouts
+                visible_candle_count,
+            ),
+            Pane::new(
+                PaneId::Volume,
+                PaneType::Volume,
+                interaction_config.default_volume_pane_height,
+                Rect::default(), // Will be calculated by calculate_layouts
+                visible_candle_count,
+            ),
+        ],
+        dimensions.separator_gap,
+    );
 
     // Calculate pane layouts using PaneManager
     pane_manager.calculate_layouts(total_area, visible_candle_count);
@@ -210,6 +223,19 @@ fn setup(mut commands: Commands) {
     commands.insert_resource(indicator_state);
     commands.insert_resource(pane_manager);
 
+    // Insert configuration resources
+    commands.insert_resource(theme.clone());
+    commands.insert_resource(dimensions);
+    commands.insert_resource(interaction_config);
+    commands.insert_resource(z_layers);
+
+    // Create ChartColors from theme for backward compatibility
+    let chart_colors = ChartColors {
+        bull_candle: theme.bull_candle,
+        bear_candle: theme.bear_candle,
+        wick: theme.wick,
+    };
+
     // Insert other resources
     commands.insert_resource(db);
     commands.insert_resource(InteractionState::default());
@@ -219,7 +245,7 @@ fn setup(mut commands: Commands) {
     commands.insert_resource(CrosshairState::default());
     commands.insert_resource(VolumeToggleState::default());
     commands.insert_resource(ScreenshotCounter::default());
-    commands.insert_resource(ChartColors::default());
+    commands.insert_resource(chart_colors);
     commands.insert_resource(InstancingEnabled::default());
 
     println!("Setup complete! Press 'V' to toggle volume pane, 'F' to take screenshot.");
@@ -272,18 +298,18 @@ fn screenshot_on_keypress(
 struct FpsText;
 
 /// Setup FPS counter UI in top-right corner
-fn setup_fps_counter(mut commands: Commands) {
+fn setup_fps_counter(mut commands: Commands, theme: Res<ChartTheme>, dimensions: Res<ChartDimensions>) {
     commands.spawn((
         Text::new("FPS: --"),
         TextFont {
-            font_size: 20.0,
+            font_size: dimensions.fps_font_size,
             ..default()
         },
-        TextColor(Color::srgb(0.0, 1.0, 0.0)), // Green text
+        TextColor(theme.fps_text),
         Node {
             position_type: PositionType::Absolute,
-            top: Val::Px(10.0),
-            right: Val::Px(10.0),
+            top: Val::Px(config::FPS_COUNTER_TOP_MARGIN),
+            right: Val::Px(config::FPS_COUNTER_RIGHT_MARGIN),
             ..default()
         },
         FpsText,
