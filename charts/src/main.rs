@@ -1,5 +1,10 @@
 mod config;
+mod coordinate;
+mod data;
+mod domain;
+mod indicators;
 mod interaction;
+mod panes;
 mod rendering;
 mod types;
 

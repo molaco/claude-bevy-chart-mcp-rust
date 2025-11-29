@@ -243,7 +243,7 @@ pub fn check_lazy_load(
 
         if let Ok(new_candles) = db.load_candles(
             chart_metadata.ticker_id,
-            &chart_metadata.timeframe,
+            chart_metadata.timeframe(),
             load_start_time,
             load_end_time - 1, // Exclude the first candle we already have
         ) {
@@ -290,7 +290,7 @@ pub fn check_lazy_load(
 
         if let Ok(new_candles) = db.load_candles(
             chart_metadata.ticker_id,
-            &chart_metadata.timeframe,
+            chart_metadata.timeframe(),
             load_start_time + 1, // Exclude the last candle we already have
             load_end_time,
         ) {
