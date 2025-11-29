@@ -48,6 +48,9 @@ pub const MAX_PANE_HEIGHT_PERCENT: f32 = 0.9;
 /// Full height when only one pane is visible
 pub const FULL_PANE_HEIGHT: f32 = 1.0;
 
+/// Minimum change threshold for pane resize to register (prevents jitter)
+pub const RESIZE_SENSITIVITY_THRESHOLD: f32 = 0.001;
+
 // ============================================================================
 // ZOOM & NAVIGATION
 // ============================================================================

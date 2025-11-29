@@ -823,9 +823,10 @@ pub struct ChartGrid {
 
 impl Default for ChartGrid {
     fn default() -> Self {
+        let theme = crate::config::ChartTheme::default();
         Self {
             show_grid: true,
-            grid_color: Color::srgba(0.3, 0.3, 0.3, crate::config::GRID_LINE_ALPHA),
+            grid_color: theme.grid_line,
             y_tick_count: crate::config::DEFAULT_Y_TICK_COUNT,
             x_tick_count: crate::config::DEFAULT_X_TICK_COUNT,
         }
@@ -843,10 +844,11 @@ pub struct ChartAxes {
 
 impl Default for ChartAxes {
     fn default() -> Self {
+        let theme = crate::config::ChartTheme::default();
         Self {
             show_x_labels: true,
             show_y_labels: true,
-            label_color: Color::srgb(0.8, 0.8, 0.8),
+            label_color: theme.axis_label,
             label_size: crate::config::AXIS_LABEL_FONT_SIZE,
         }
     }
@@ -864,9 +866,10 @@ pub struct Crosshair {
 
 impl Default for Crosshair {
     fn default() -> Self {
+        let theme = crate::config::ChartTheme::default();
         Self {
             enabled: true,
-            line_color: Color::srgba(1.0, 1.0, 1.0, crate::config::CROSSHAIR_LINE_ALPHA),
+            line_color: theme.crosshair_line,
             show_ohlcv_box: true,
             show_price_label: true,
             show_time_label: true,

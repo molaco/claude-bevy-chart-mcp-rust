@@ -117,8 +117,12 @@ pub fn init_crosshair(commands: &mut Commands, pane_manager: &PaneManager) {
     let dash_length = config::CROSSHAIR_DASH_LENGTH;
     let gap_length = config::CROSSHAIR_GAP_LENGTH;
     let pattern_length = dash_length + gap_length;
-    let crosshair_line_color = Color::srgba(1.0, 1.0, 1.0, config::CROSSHAIR_LINE_ALPHA);
-    let crosshair_label_color = Color::srgb(1.0, 1.0, 0.0); // Yellow
+
+    // Get colors from theme (using default since this runs before resources are inserted)
+    let theme = config::ChartTheme::default();
+    let crosshair_line_color = theme.crosshair_line;
+    let crosshair_label_color = theme.crosshair_label;
+    let ohlcv_text_color = theme.ohlcv_text;
 
     // Spawn vertical line segments (dashed pattern)
     let num_segments = (total_height / pattern_length).ceil() as usize;
@@ -210,7 +214,7 @@ pub fn init_crosshair(commands: &mut Commands, pane_manager: &PaneManager) {
                 font_size: config::OHLCV_BOX_FONT_SIZE,
                 ..default()
             },
-            TextColor(Color::srgb(1.0, 1.0, 1.0)), // White
+            TextColor(ohlcv_text_color),
             Transform::from_translation(Vec3::new(
                 first_pane.space.viewport.min.x + config::OHLCV_BOX_OFFSET_X,
                 first_pane.space.viewport.max.y - config::OHLCV_BOX_OFFSET_Y,

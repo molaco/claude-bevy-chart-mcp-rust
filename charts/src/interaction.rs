@@ -101,7 +101,7 @@ pub fn handle_mouse_input(
 
         // Check if both constraints are satisfied
         let total_change = (new_above - orig_above).abs() + (new_below - orig_below).abs();
-        if total_change > 0.001 {
+        if total_change > crate::config::RESIZE_SENSITIVITY_THRESHOLD {
             pane_manager.panes[gap_idx].height_percent = new_above;
             pane_manager.panes[gap_idx + 1].height_percent = new_below;
 
