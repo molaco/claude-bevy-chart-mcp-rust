@@ -187,4 +187,146 @@ mod tests {
         assert_eq!(format!("{}", Timeframe::H4), "4h");
         assert_eq!(format!("{}", Timeframe::D1), "1d");
     }
+
+    // ========================================================================
+    // ADDITIONAL TIMEFRAME TESTS
+    // ========================================================================
+
+    #[test]
+    fn test_timeframe_to_seconds() {
+        assert_eq!(Timeframe::M1.to_seconds(), 60);
+        assert_eq!(Timeframe::M5.to_seconds(), 5 * 60);
+        assert_eq!(Timeframe::M15.to_seconds(), 15 * 60);
+        assert_eq!(Timeframe::M30.to_seconds(), 30 * 60);
+        assert_eq!(Timeframe::H1.to_seconds(), 3600);
+        assert_eq!(Timeframe::H4.to_seconds(), 4 * 3600);
+        assert_eq!(Timeframe::D1.to_seconds(), 86400);
+        assert_eq!(Timeframe::W1.to_seconds(), 7 * 86400);
+        assert_eq!(Timeframe::MN1.to_seconds(), 30 * 86400);
+    }
+
+    #[test]
+    fn test_timeframe_all() {
+        let all = Timeframe::all();
+
+        assert_eq!(all.len(), 9);
+        assert!(all.contains(&Timeframe::M1));
+        assert!(all.contains(&Timeframe::M5));
+        assert!(all.contains(&Timeframe::M15));
+        assert!(all.contains(&Timeframe::M30));
+        assert!(all.contains(&Timeframe::H1));
+        assert!(all.contains(&Timeframe::H4));
+        assert!(all.contains(&Timeframe::D1));
+        assert!(all.contains(&Timeframe::W1));
+        assert!(all.contains(&Timeframe::MN1));
+    }
+
+    #[test]
+    fn test_timeframe_description() {
+        assert_eq!(Timeframe::M1.description(), "1 Minute");
+        assert_eq!(Timeframe::M5.description(), "5 Minutes");
+        assert_eq!(Timeframe::H1.description(), "1 Hour");
+        assert_eq!(Timeframe::D1.description(), "1 Day");
+        assert_eq!(Timeframe::W1.description(), "1 Week");
+        assert_eq!(Timeframe::MN1.description(), "1 Month");
+    }
+
+    #[test]
+    fn test_timeframe_default() {
+        assert_eq!(Timeframe::default(), Timeframe::M1);
+    }
+
+    #[test]
+    fn test_timeframe_parse_invalid_strings() {
+        let invalid = ["", "abc", "1", "m", "h", "d", "M1", "1M "];
+        for s in invalid {
+            assert!(
+                s.parse::<Timeframe>().is_err(),
+                "'{}' should fail to parse",
+                s
+            );
+        }
+    }
+
+    #[test]
+    fn test_timeframe_as_str_all_variants() {
+        assert_eq!(Timeframe::M1.as_str(), "1m");
+        assert_eq!(Timeframe::M5.as_str(), "5m");
+        assert_eq!(Timeframe::M15.as_str(), "15m");
+        assert_eq!(Timeframe::M30.as_str(), "30m");
+        assert_eq!(Timeframe::H1.as_str(), "1h");
+        assert_eq!(Timeframe::H4.as_str(), "4h");
+        assert_eq!(Timeframe::D1.as_str(), "1d");
+        assert_eq!(Timeframe::W1.as_str(), "1w");
+        assert_eq!(Timeframe::MN1.as_str(), "1M");
+    }
+
+    #[test]
+    fn test_timeframe_durations_increase() {
+        // Each larger timeframe should have a longer duration
+        let timeframes = [
+            Timeframe::M1,
+            Timeframe::M5,
+            Timeframe::M15,
+            Timeframe::M30,
+            Timeframe::H1,
+            Timeframe::H4,
+            Timeframe::D1,
+            Timeframe::W1,
+            Timeframe::MN1,
+        ];
+
+        for i in 0..(timeframes.len() - 1) {
+            assert!(
+                timeframes[i].to_ms() < timeframes[i + 1].to_ms(),
+                "{:?} should have shorter duration than {:?}",
+                timeframes[i],
+                timeframes[i + 1]
+            );
+        }
+    }
+
+    #[test]
+    fn test_timeframe_clone_and_copy() {
+        let tf = Timeframe::H4;
+        let cloned = tf.clone();
+        let copied = tf; // Copy trait
+
+        assert_eq!(tf, cloned);
+        assert_eq!(tf, copied);
+    }
+
+    #[test]
+    fn test_timeframe_hash() {
+        use std::collections::HashSet;
+
+        let mut set = HashSet::new();
+        set.insert(Timeframe::M1);
+        set.insert(Timeframe::H4);
+        set.insert(Timeframe::M1); // Duplicate
+
+        assert_eq!(set.len(), 2);
+        assert!(set.contains(&Timeframe::M1));
+        assert!(set.contains(&Timeframe::H4));
+    }
+
+    #[test]
+    fn test_parse_timeframe_error_display() {
+        let result = "invalid".parse::<Timeframe>();
+        assert!(result.is_err());
+
+        let err = result.unwrap_err();
+        let msg = format!("{}", err);
+        assert!(msg.contains("invalid"));
+        assert!(msg.contains("1m"));
+    }
+
+    #[test]
+    fn test_timeframe_ms_known_values() {
+        // Verify exact millisecond values
+        assert_eq!(Timeframe::M1.to_ms(), 60_000);
+        assert_eq!(Timeframe::H1.to_ms(), 3_600_000);
+        assert_eq!(Timeframe::D1.to_ms(), 86_400_000);
+        assert_eq!(Timeframe::W1.to_ms(), 604_800_000);
+    }
 }

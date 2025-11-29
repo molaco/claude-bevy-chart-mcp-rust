@@ -239,3 +239,290 @@ pub const RESIZE_GRIP_ACTIVE_ALPHA: f32 = 0.9;
 
 /// Alpha value for inactive resize grip
 pub const RESIZE_GRIP_INACTIVE_ALPHA: f32 = 0.7;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ========================================================================
+    // WINDOW & VIEWPORT CONSTRAINT TESTS
+    // ========================================================================
+
+    #[test]
+    fn test_chart_area_fits_window() {
+        assert!(
+            CHART_AREA_WIDTH < WINDOW_WIDTH,
+            "Chart area width ({}) must be less than window width ({})",
+            CHART_AREA_WIDTH, WINDOW_WIDTH
+        );
+        assert!(
+            CHART_AREA_HEIGHT < WINDOW_HEIGHT,
+            "Chart area height ({}) must be less than window height ({})",
+            CHART_AREA_HEIGHT, WINDOW_HEIGHT
+        );
+    }
+
+    #[test]
+    fn test_window_dimensions_positive() {
+        assert!(WINDOW_WIDTH > 0.0, "Window width must be positive");
+        assert!(WINDOW_HEIGHT > 0.0, "Window height must be positive");
+        assert!(CHART_AREA_WIDTH > 0.0, "Chart area width must be positive");
+        assert!(CHART_AREA_HEIGHT > 0.0, "Chart area height must be positive");
+    }
+
+    // ========================================================================
+    // PANE LAYOUT CONSTRAINT TESTS
+    // ========================================================================
+
+    #[test]
+    fn test_pane_height_constraints_valid() {
+        assert!(
+            MIN_PANE_HEIGHT_PERCENT > 0.0,
+            "Min pane height must be positive"
+        );
+        assert!(
+            MAX_PANE_HEIGHT_PERCENT < 1.0,
+            "Max pane height must be less than 1.0 to allow other panes"
+        );
+        assert!(
+            MIN_PANE_HEIGHT_PERCENT < MAX_PANE_HEIGHT_PERCENT,
+            "Min pane height must be less than max"
+        );
+        assert!(
+            MIN_PANE_HEIGHT_PERCENT * 2.0 <= 1.0,
+            "Two panes at minimum height must fit (2 * {} <= 1.0)",
+            MIN_PANE_HEIGHT_PERCENT
+        );
+    }
+
+    #[test]
+    fn test_default_pane_heights_sum_to_one() {
+        let sum = DEFAULT_PRICE_PANE_HEIGHT + DEFAULT_VOLUME_PANE_HEIGHT;
+        assert!(
+            (sum - 1.0).abs() < 0.001,
+            "Default pane heights should sum to 1.0, got {}",
+            sum
+        );
+    }
+
+    #[test]
+    fn test_default_pane_heights_within_constraints() {
+        assert!(
+            DEFAULT_PRICE_PANE_HEIGHT >= MIN_PANE_HEIGHT_PERCENT,
+            "Default price pane height below minimum"
+        );
+        assert!(
+            DEFAULT_PRICE_PANE_HEIGHT <= MAX_PANE_HEIGHT_PERCENT,
+            "Default price pane height above maximum"
+        );
+        assert!(
+            DEFAULT_VOLUME_PANE_HEIGHT >= MIN_PANE_HEIGHT_PERCENT,
+            "Default volume pane height below minimum"
+        );
+        assert!(
+            DEFAULT_VOLUME_PANE_HEIGHT <= MAX_PANE_HEIGHT_PERCENT,
+            "Default volume pane height above maximum"
+        );
+    }
+
+    #[test]
+    fn test_separator_gap_positive() {
+        assert!(PANE_SEPARATOR_GAP > 0.0, "Separator gap must be positive");
+    }
+
+    #[test]
+    fn test_resize_sensitivity_positive() {
+        assert!(
+            RESIZE_SENSITIVITY_THRESHOLD > 0.0,
+            "Resize sensitivity must be positive"
+        );
+        assert!(
+            RESIZE_SENSITIVITY_THRESHOLD < 0.1,
+            "Resize sensitivity should be small for smooth resizing"
+        );
+    }
+
+    // ========================================================================
+    // ZOOM CONSTRAINT TESTS
+    // ========================================================================
+
+    #[test]
+    fn test_zoom_factors_valid() {
+        assert!(
+            ZOOM_IN_FACTOR > 0.0 && ZOOM_IN_FACTOR < 1.0,
+            "Zoom in factor ({}) must be in (0, 1)",
+            ZOOM_IN_FACTOR
+        );
+        assert!(
+            ZOOM_OUT_FACTOR > 1.0,
+            "Zoom out factor ({}) must be > 1.0",
+            ZOOM_OUT_FACTOR
+        );
+    }
+
+    #[test]
+    fn test_zoom_factors_inversely_related() {
+        // Zoom in then out should approximately return to original
+        let result = ZOOM_IN_FACTOR * ZOOM_OUT_FACTOR;
+        assert!(
+            (result - 1.0).abs() < 0.05,
+            "Zoom factors should be approximately inverse: {} * {} = {}",
+            ZOOM_IN_FACTOR, ZOOM_OUT_FACTOR, result
+        );
+    }
+
+    #[test]
+    fn test_visible_candle_constraints() {
+        assert!(
+            MIN_VISIBLE_CANDLES > 0.0,
+            "Min visible candles must be positive"
+        );
+        assert!(
+            MAX_VISIBLE_CANDLES > MIN_VISIBLE_CANDLES,
+            "Max visible candles must exceed minimum"
+        );
+        assert!(
+            (DEFAULT_VISIBLE_CANDLES as f32) >= MIN_VISIBLE_CANDLES,
+            "Default visible candles below minimum"
+        );
+        assert!(
+            (DEFAULT_VISIBLE_CANDLES as f32) <= MAX_VISIBLE_CANDLES,
+            "Default visible candles above maximum"
+        );
+    }
+
+    // ========================================================================
+    // Z-LAYER ORDERING TESTS
+    // ========================================================================
+
+    #[test]
+    fn test_z_layers_strictly_ordered() {
+        // Grid should be in background
+        assert!(Z_LAYER_GRID < Z_LAYER_VOLUME, "Grid should be behind volume");
+        assert!(Z_LAYER_VOLUME < Z_LAYER_PANE_BORDERS, "Volume should be behind pane borders");
+        assert!(Z_LAYER_PANE_BORDERS < Z_LAYER_RESIZE_GRIPS, "Borders should be behind resize grips");
+        assert!(Z_LAYER_RESIZE_GRIPS < Z_LAYER_AXIS_LABELS, "Resize grips should be behind axis labels");
+        assert!(Z_LAYER_AXIS_LABELS < Z_LAYER_CROSSHAIR_LINES, "Axis labels should be behind crosshair");
+        assert!(Z_LAYER_CROSSHAIR_LINES < Z_LAYER_CROSSHAIR_LABELS, "Crosshair lines should be behind labels");
+    }
+
+    // ========================================================================
+    // RENDERING DIMENSION TESTS
+    // ========================================================================
+
+    #[test]
+    fn test_width_ratios_valid() {
+        assert!(
+            CANDLE_BODY_WIDTH_RATIO > 0.0 && CANDLE_BODY_WIDTH_RATIO <= 1.0,
+            "Candle body width ratio must be in (0, 1]"
+        );
+        assert!(
+            VOLUME_BAR_WIDTH_RATIO > 0.0 && VOLUME_BAR_WIDTH_RATIO <= 1.0,
+            "Volume bar width ratio must be in (0, 1]"
+        );
+    }
+
+    #[test]
+    fn test_min_element_height_positive() {
+        assert!(MIN_ELEMENT_HEIGHT > 0.0, "Min element height must be positive");
+    }
+
+    #[test]
+    fn test_crosshair_pattern_positive() {
+        assert!(CROSSHAIR_DASH_LENGTH > 0.0, "Crosshair dash length must be positive");
+        assert!(CROSSHAIR_GAP_LENGTH > 0.0, "Crosshair gap length must be positive");
+        assert!(CROSSHAIR_LINE_THICKNESS > 0.0, "Crosshair line thickness must be positive");
+    }
+
+    #[test]
+    fn test_font_sizes_positive() {
+        assert!(AXIS_LABEL_FONT_SIZE > 0.0, "Axis label font size must be positive");
+        assert!(CROSSHAIR_LABEL_FONT_SIZE > 0.0, "Crosshair label font size must be positive");
+        assert!(OHLCV_BOX_FONT_SIZE > 0.0, "OHLCV box font size must be positive");
+        assert!(FPS_COUNTER_FONT_SIZE > 0.0, "FPS counter font size must be positive");
+    }
+
+    // ========================================================================
+    // TRANSPARENCY VALUE TESTS
+    // ========================================================================
+
+    #[test]
+    fn test_alpha_values_in_range() {
+        let alpha_values = [
+            ("volume bar", VOLUME_BAR_ALPHA),
+            ("pane border", PANE_BORDER_ALPHA),
+            ("crosshair line", CROSSHAIR_LINE_ALPHA),
+            ("grid line", GRID_LINE_ALPHA),
+            ("resize grip active", RESIZE_GRIP_ACTIVE_ALPHA),
+            ("resize grip inactive", RESIZE_GRIP_INACTIVE_ALPHA),
+        ];
+
+        for (name, alpha) in alpha_values {
+            assert!(
+                alpha > 0.0 && alpha <= 1.0,
+                "{} alpha ({}) must be in (0, 1]",
+                name, alpha
+            );
+        }
+    }
+
+    // ========================================================================
+    // DATA LOADING TESTS
+    // ========================================================================
+
+    #[test]
+    fn test_lazy_load_threshold_positive() {
+        assert!(LAZY_LOAD_THRESHOLD > 0, "Lazy load threshold must be positive");
+    }
+
+    #[test]
+    fn test_lazy_load_batch_size_positive() {
+        assert!(LAZY_LOAD_BATCH_SIZE > 0, "Lazy load batch size must be positive");
+    }
+
+    // ========================================================================
+    // INDICATOR DEFAULTS TESTS
+    // ========================================================================
+
+    #[test]
+    fn test_sma_periods_ascending() {
+        assert!(
+            DEFAULT_SMA_SHORT_PERIOD < DEFAULT_SMA_MEDIUM_PERIOD,
+            "Short SMA period should be less than medium"
+        );
+        assert!(
+            DEFAULT_SMA_MEDIUM_PERIOD < DEFAULT_SMA_LONG_PERIOD,
+            "Medium SMA period should be less than long"
+        );
+    }
+
+    #[test]
+    fn test_sma_periods_positive() {
+        assert!(DEFAULT_SMA_SHORT_PERIOD > 0, "Short SMA period must be positive");
+        assert!(DEFAULT_SMA_MEDIUM_PERIOD > 0, "Medium SMA period must be positive");
+        assert!(DEFAULT_SMA_LONG_PERIOD > 0, "Long SMA period must be positive");
+    }
+
+    // ========================================================================
+    // GRID CONFIGURATION TESTS
+    // ========================================================================
+
+    #[test]
+    fn test_tick_counts_positive() {
+        assert!(DEFAULT_Y_TICK_COUNT > 0, "Y tick count must be positive");
+        assert!(DEFAULT_X_TICK_COUNT > 0, "X tick count must be positive");
+    }
+
+    // ========================================================================
+    // PRICE PADDING TEST
+    // ========================================================================
+
+    #[test]
+    fn test_price_padding_reasonable() {
+        assert!(
+            PRICE_PADDING_PERCENT >= 0.0 && PRICE_PADDING_PERCENT < 1.0,
+            "Price padding percent ({}) must be in [0, 1)",
+            PRICE_PADDING_PERCENT
+        );
+    }
+}

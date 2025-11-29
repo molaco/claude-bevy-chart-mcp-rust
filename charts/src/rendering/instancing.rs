@@ -93,6 +93,7 @@ impl CandleInstance {
     ///
     /// # Example
     /// ```
+    /// use charts::rendering::CandleInstance;
     /// let candle = CandleInstance::new(100.0, 8.0, 50.0, 52.0, 49.0, 51.0);
     /// assert_eq!(candle.is_bullish, 1.0); // close > open
     /// ```
@@ -134,6 +135,7 @@ impl CandleInstance {
     ///
     /// # Example
     /// ```
+    /// use charts::rendering::CandleInstance;
     /// let candle = CandleInstance::with_bullish(100.0, 8.0, 50.0, 52.0, 49.0, 51.0, false);
     /// assert_eq!(candle.is_bullish, 0.0); // forced bearish
     /// ```

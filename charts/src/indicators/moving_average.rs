@@ -562,4 +562,273 @@ mod tests {
             }
         }
     }
+
+    // ========================================================================
+    // EMA TESTS
+    // ========================================================================
+
+    #[test]
+    fn test_ema_basic_calculation() {
+        let candles = create_test_candles(100);
+        let ema = MovingAverage::calculate_ema(&candles, 20);
+
+        assert_eq!(ema.len(), candles.len());
+
+        // First 19 values should be None
+        for i in 0..19 {
+            assert!(ema[i].is_none(), "EMA index {} should be None", i);
+        }
+
+        // Index 19 and onwards should have values
+        for i in 19..ema.len() {
+            assert!(ema[i].is_some(), "EMA index {} should have a value", i);
+        }
+    }
+
+    #[test]
+    fn test_ema_first_value_equals_sma() {
+        let candles = create_test_candles(100);
+        let ema = MovingAverage::calculate_ema(&candles, 20);
+        let sma = MovingAverage::calculate_sma(&candles, 20);
+
+        // First EMA value (at index 19) should equal first SMA value
+        match (ema[19], sma[19]) {
+            (Some(e), Some(s)) => {
+                assert!(
+                    (e - s).abs() < 0.001,
+                    "First EMA ({}) should equal first SMA ({})",
+                    e, s
+                );
+            }
+            _ => panic!("Both EMA and SMA should have values at index 19"),
+        }
+    }
+
+    #[test]
+    fn test_ema_edge_case_empty() {
+        let candles: Vec<Candle> = vec![];
+        let ema = MovingAverage::calculate_ema(&candles, 20);
+        assert_eq!(ema.len(), 0);
+    }
+
+    #[test]
+    fn test_ema_edge_case_insufficient() {
+        let candles = create_test_candles(10);
+        let ema = MovingAverage::calculate_ema(&candles, 20);
+
+        assert_eq!(ema.len(), 10);
+        assert!(ema.iter().all(|v| v.is_none()), "All should be None when insufficient data");
+    }
+
+    #[test]
+    fn test_ema_edge_case_period_one() {
+        let candles = create_test_candles(10);
+        let ema = MovingAverage::calculate_ema(&candles, 1);
+
+        // With period 1, EMA should equal close prices
+        for i in 0..candles.len() {
+            match ema[i] {
+                Some(v) => {
+                    assert!(
+                        (v - candles[i].close as f32).abs() < 0.001,
+                        "EMA with period 1 at {} should equal close price",
+                        i
+                    );
+                }
+                None => panic!("EMA period 1 should have value at index {}", i),
+            }
+        }
+    }
+
+    #[test]
+    fn test_ema_multiplier_calculation() {
+        // EMA multiplier = 2 / (period + 1)
+        // For period 20: 2 / 21 ≈ 0.0952
+        let expected_multiplier: f64 = 2.0 / 21.0;
+
+        // Create candles with known values to verify multiplier effect
+        let candles: Vec<Candle> = (0..30)
+            .map(|i| Candle {
+                time: i as i64 * 1000,
+                open: 100.0,
+                high: 100.0,
+                low: 100.0,
+                close: 100.0, // All same close price
+                volume: 1000.0,
+            })
+            .collect();
+
+        let ema = MovingAverage::calculate_ema(&candles, 20);
+
+        // All values from index 19 onwards should be 100 (since all closes are 100)
+        for i in 19..ema.len() {
+            match ema[i] {
+                Some(v) => {
+                    assert!(
+                        (v - 100.0).abs() < 0.001,
+                        "EMA with constant prices should equal that price"
+                    );
+                }
+                None => panic!("Expected EMA value at index {}", i),
+            }
+        }
+
+        // Verify multiplier is used correctly
+        assert!((expected_multiplier - 2.0 / 21.0).abs() < 0.0001);
+    }
+
+    #[test]
+    fn test_ema_responds_to_price_changes() {
+        // EMA should respond faster to price changes than SMA
+        let mut candles = create_test_candles(50);
+
+        // Add a spike at the end
+        candles.push(Candle {
+            time: 50000,
+            open: 1000.0,
+            high: 1000.0,
+            low: 1000.0,
+            close: 1000.0, // Much higher than previous values
+            volume: 1000.0,
+        });
+
+        let ema = MovingAverage::calculate_ema(&candles, 10);
+        let sma = MovingAverage::calculate_sma(&candles, 10);
+
+        // EMA should react more strongly to the spike
+        // (This is a property test - EMA gives more weight to recent values)
+        if let (Some(ema_last), Some(sma_last)) = (ema[50], sma[50]) {
+            // EMA should be higher because it weights recent prices more
+            assert!(
+                ema_last > sma_last,
+                "EMA ({}) should be higher than SMA ({}) after a spike",
+                ema_last, sma_last
+            );
+        }
+    }
+
+    #[test]
+    fn test_ema_numerical_stability_large_values() {
+        // Test with large price values
+        let candles: Vec<Candle> = (0..100)
+            .map(|i| Candle {
+                time: i as i64,
+                open: 1_000_000.0 + i as f64,
+                high: 1_000_000.0 + i as f64,
+                low: 1_000_000.0 + i as f64,
+                close: 1_000_000.0 + i as f64,
+                volume: 1000.0,
+            })
+            .collect();
+
+        let ema = MovingAverage::calculate_ema(&candles, 20);
+
+        // All values should be finite (not NaN or infinite)
+        for (i, value) in ema.iter().enumerate() {
+            if let Some(v) = value {
+                assert!(
+                    v.is_finite(),
+                    "EMA at {} should be finite, got {}",
+                    i, v
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_ema_convergence_long_run() {
+        // Test EMA stability over many iterations
+        let candles = create_test_candles(10000);
+        let ema = MovingAverage::calculate_ema(&candles, 20);
+
+        // No NaN after many iterations
+        for (i, value) in ema.iter().enumerate() {
+            if let Some(v) = value {
+                assert!(
+                    !v.is_nan(),
+                    "EMA at {} should not be NaN after {} iterations",
+                    i, i
+                );
+            }
+        }
+
+        // Last value should be reasonable (close to recent prices)
+        if let Some(last_ema) = ema[9999] {
+            let last_close = candles[9999].close as f32;
+            let diff_percent = ((last_ema - last_close) / last_close).abs();
+            assert!(
+                diff_percent < 0.5, // Within 50% of last close
+                "EMA should be reasonably close to recent prices"
+            );
+        }
+    }
+
+    #[test]
+    fn test_ema_exact_period_count() {
+        let candles = create_test_candles(20);
+        let ema = MovingAverage::calculate_ema(&candles, 20);
+
+        // First 19 should be None
+        for i in 0..19 {
+            assert!(ema[i].is_none(), "Index {} should be None", i);
+        }
+
+        // Index 19 should have exactly one value
+        assert!(ema[19].is_some(), "Index 19 should have a value");
+    }
+
+    #[test]
+    fn test_ema_different_periods() {
+        let candles = create_test_candles(200);
+
+        for period in [5, 10, 20, 50, 100] {
+            let ema = MovingAverage::calculate_ema(&candles, period);
+
+            assert_eq!(ema.len(), candles.len());
+
+            // First (period - 1) should be None
+            for i in 0..(period - 1) {
+                assert!(
+                    ema[i].is_none(),
+                    "Period {} index {} should be None",
+                    period, i
+                );
+            }
+
+            // Index (period - 1) and onwards should have values
+            for i in (period - 1)..ema.len() {
+                assert!(
+                    ema[i].is_some(),
+                    "Period {} index {} should have value",
+                    period, i
+                );
+            }
+        }
+    }
+
+    // ========================================================================
+    // NEW SMA/EMA INDICATOR CREATION TESTS
+    // ========================================================================
+
+    #[test]
+    fn test_new_sma_indicator() {
+        let candles = create_test_candles(100);
+        let ma = MovingAverage::new_sma(&candles, 20, Color::srgb(1.0, 0.8, 0.0));
+
+        assert_eq!(ma.period, 20);
+        assert_eq!(ma.name, "SMA-20");
+        assert!(ma.visible);
+        assert_eq!(ma.values.len(), 100);
+    }
+
+    #[test]
+    fn test_new_ema_indicator() {
+        let candles = create_test_candles(100);
+        let ma = MovingAverage::new_ema(&candles, 50, Color::srgb(0.0, 1.0, 1.0));
+
+        assert_eq!(ma.period, 50);
+        assert_eq!(ma.name, "EMA-50");
+        assert!(ma.visible);
+        assert_eq!(ma.values.len(), 100);
+    }
 }

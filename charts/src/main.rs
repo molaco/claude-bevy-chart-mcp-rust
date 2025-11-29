@@ -1,26 +1,20 @@
-mod config;
-mod coordinate;
-mod data;
-mod domain;
-mod indicators;
-mod interaction;
-mod panes;
-mod rendering;
-mod types;
-
 use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
 use bevy::prelude::*;
 use bevy::render::view::screenshot::{save_to_disk, Screenshot};
 use bevy::window::{PresentMode, WindowResolution};
-use config::{ChartDimensions, ChartTheme, InteractionConfig, ZLayerConfig};
-use interaction::{
+
+use charts::config::{self, ChartDimensions, ChartTheme, InteractionConfig, ZLayerConfig};
+use charts::coordinate::right_spacing_candles;
+use charts::data::ChartDatabase;
+use charts::interaction::{
     check_lazy_load, handle_pan, handle_resize, handle_zoom,
     toggle_sma_indicators, toggle_volume_pane, update_cursor_icon,
     update_cursor_position, update_interaction_mode, InteractionState,
 };
-use rendering::*;
-use rendering::{CandlestickInstancedPlugin, InstancingEnabled};
-use types::*;
+use charts::panes::{Pane, PaneId, PaneManager, PaneType};
+use charts::rendering::*;
+use charts::rendering::{CandlestickInstancedPlugin, InstancingEnabled};
+use charts::types::*;
 
 // ============================================================================
 // SYSTEM SETS

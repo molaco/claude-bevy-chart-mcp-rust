@@ -378,3 +378,294 @@ impl Default for ZLayerConfig {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Helper to extract alpha from Color (works with srgb/srgba)
+    fn get_alpha(color: &Color) -> f32 {
+        match color {
+            Color::Srgba(srgba) => srgba.alpha,
+            _ => 1.0, // Default to fully opaque for other color types
+        }
+    }
+
+    // ========================================================================
+    // CHART THEME TESTS
+    // ========================================================================
+
+    #[test]
+    fn test_chart_theme_dark_creates_valid_theme() {
+        let theme = ChartTheme::dark();
+
+        // Verify all colors can be accessed without panic
+        let _ = theme.bull_candle;
+        let _ = theme.bear_candle;
+        let _ = theme.wick;
+        let _ = theme.bull_volume;
+        let _ = theme.bear_volume;
+        let _ = theme.grid_line;
+        let _ = theme.axis_label;
+        let _ = theme.crosshair_line;
+        let _ = theme.crosshair_label;
+        let _ = theme.ohlcv_text;
+        let _ = theme.pane_border;
+        let _ = theme.resize_grip_active;
+        let _ = theme.resize_grip_inactive;
+        let _ = theme.sma_short;
+        let _ = theme.sma_medium;
+        let _ = theme.sma_long;
+        let _ = theme.fps_text;
+        let _ = theme.background;
+    }
+
+    #[test]
+    fn test_chart_theme_light_creates_valid_theme() {
+        let theme = ChartTheme::light();
+
+        // Verify all colors can be accessed without panic
+        let _ = theme.bull_candle;
+        let _ = theme.bear_candle;
+        let _ = theme.wick;
+        let _ = theme.bull_volume;
+        let _ = theme.bear_volume;
+        let _ = theme.grid_line;
+    }
+
+    #[test]
+    fn test_chart_theme_default_is_dark() {
+        let default_theme = ChartTheme::default();
+        let dark_theme = ChartTheme::dark();
+
+        // Default should match dark theme (compare a few key colors)
+        assert_eq!(
+            format!("{:?}", default_theme.bull_candle),
+            format!("{:?}", dark_theme.bull_candle),
+            "Default theme should use dark theme colors"
+        );
+    }
+
+    #[test]
+    fn test_chart_theme_dark_colors_visible() {
+        let theme = ChartTheme::dark();
+
+        // Colors that should be fully opaque
+        let opaque_colors = [
+            ("bull_candle", &theme.bull_candle),
+            ("bear_candle", &theme.bear_candle),
+            ("wick", &theme.wick),
+            ("crosshair_label", &theme.crosshair_label),
+            ("ohlcv_text", &theme.ohlcv_text),
+            ("sma_short", &theme.sma_short),
+            ("sma_medium", &theme.sma_medium),
+            ("sma_long", &theme.sma_long),
+        ];
+
+        for (name, color) in opaque_colors {
+            let alpha = get_alpha(color);
+            assert!(
+                alpha > 0.9,
+                "{} should be nearly opaque, got alpha {}",
+                name, alpha
+            );
+        }
+    }
+
+    #[test]
+    fn test_chart_theme_dark_transparent_colors_have_some_alpha() {
+        let theme = ChartTheme::dark();
+
+        // Colors that should have transparency but still be visible
+        let transparent_colors = [
+            ("bull_volume", &theme.bull_volume),
+            ("bear_volume", &theme.bear_volume),
+            ("grid_line", &theme.grid_line),
+            ("crosshair_line", &theme.crosshair_line),
+            ("pane_border", &theme.pane_border),
+        ];
+
+        for (name, color) in transparent_colors {
+            let alpha = get_alpha(color);
+            assert!(
+                alpha > 0.0,
+                "{} should have positive alpha, got {}",
+                name, alpha
+            );
+        }
+    }
+
+    #[test]
+    fn test_chart_theme_light_colors_visible() {
+        let theme = ChartTheme::light();
+
+        // Key colors should be visible
+        let key_colors = [
+            ("bull_candle", &theme.bull_candle),
+            ("bear_candle", &theme.bear_candle),
+        ];
+
+        for (name, color) in key_colors {
+            let alpha = get_alpha(color);
+            assert!(
+                alpha > 0.9,
+                "Light theme {} should be nearly opaque, got alpha {}",
+                name, alpha
+            );
+        }
+    }
+
+    // ========================================================================
+    // CHART DIMENSIONS TESTS
+    // ========================================================================
+
+    #[test]
+    fn test_chart_dimensions_default_all_positive() {
+        let dims = ChartDimensions::default();
+
+        assert!(dims.window_width > 0.0, "Window width must be positive");
+        assert!(dims.window_height > 0.0, "Window height must be positive");
+        assert!(dims.chart_area_width > 0.0, "Chart area width must be positive");
+        assert!(dims.chart_area_height > 0.0, "Chart area height must be positive");
+        assert!(dims.separator_gap > 0.0, "Separator gap must be positive");
+        assert!(dims.border_thickness > 0.0, "Border thickness must be positive");
+        assert!(dims.body_width_ratio > 0.0, "Body width ratio must be positive");
+        assert!(dims.min_element_height > 0.0, "Min element height must be positive");
+        assert!(dims.crosshair_dash_length > 0.0, "Crosshair dash length must be positive");
+        assert!(dims.crosshair_gap_length > 0.0, "Crosshair gap length must be positive");
+        assert!(dims.axis_label_font_size > 0.0, "Axis label font size must be positive");
+    }
+
+    #[test]
+    fn test_chart_dimensions_chart_area_smaller_than_window() {
+        let dims = ChartDimensions::default();
+
+        assert!(
+            dims.chart_area_width < dims.window_width,
+            "Chart area width should be smaller than window width"
+        );
+        assert!(
+            dims.chart_area_height < dims.window_height,
+            "Chart area height should be smaller than window height"
+        );
+    }
+
+    // ========================================================================
+    // INTERACTION CONFIG TESTS
+    // ========================================================================
+
+    #[test]
+    fn test_interaction_config_zoom_factors_valid() {
+        let config = InteractionConfig::default();
+
+        assert!(
+            config.zoom_in_factor > 0.0 && config.zoom_in_factor < 1.0,
+            "Zoom in factor ({}) must be in (0, 1)",
+            config.zoom_in_factor
+        );
+        assert!(
+            config.zoom_out_factor > 1.0,
+            "Zoom out factor ({}) must be > 1.0",
+            config.zoom_out_factor
+        );
+    }
+
+    #[test]
+    fn test_interaction_config_pane_heights_valid() {
+        let config = InteractionConfig::default();
+
+        assert!(
+            config.min_pane_height > 0.0,
+            "Min pane height must be positive"
+        );
+        assert!(
+            config.max_pane_height <= 1.0,
+            "Max pane height must be <= 1.0"
+        );
+        assert!(
+            config.min_pane_height < config.max_pane_height,
+            "Min pane height must be less than max"
+        );
+    }
+
+    #[test]
+    fn test_interaction_config_visible_candles_valid() {
+        let config = InteractionConfig::default();
+
+        assert!(
+            config.min_visible_candles > 0.0,
+            "Min visible candles must be positive"
+        );
+        assert!(
+            config.max_visible_candles > config.min_visible_candles,
+            "Max visible candles must exceed minimum"
+        );
+        assert!(
+            (config.default_visible_candles as f32) >= config.min_visible_candles,
+            "Default visible candles below minimum"
+        );
+        assert!(
+            (config.default_visible_candles as f32) <= config.max_visible_candles,
+            "Default visible candles above maximum"
+        );
+    }
+
+    #[test]
+    fn test_interaction_config_default_heights_valid() {
+        let config = InteractionConfig::default();
+
+        assert!(
+            config.default_price_pane_height >= config.min_pane_height,
+            "Default price pane height below minimum"
+        );
+        assert!(
+            config.default_price_pane_height <= config.max_pane_height,
+            "Default price pane height above maximum"
+        );
+        assert!(
+            config.default_volume_pane_height >= config.min_pane_height,
+            "Default volume pane height below minimum"
+        );
+        assert!(
+            config.default_volume_pane_height <= config.max_pane_height,
+            "Default volume pane height above maximum"
+        );
+
+        let sum = config.default_price_pane_height + config.default_volume_pane_height;
+        assert!(
+            (sum - 1.0).abs() < 0.001,
+            "Default pane heights should sum to 1.0, got {}",
+            sum
+        );
+    }
+
+    #[test]
+    fn test_interaction_config_lazy_load_valid() {
+        let config = InteractionConfig::default();
+
+        assert!(
+            config.lazy_load_threshold > 0,
+            "Lazy load threshold must be positive"
+        );
+        assert!(
+            config.lazy_load_batch_size > 0,
+            "Lazy load batch size must be positive"
+        );
+    }
+
+    // ========================================================================
+    // Z-LAYER CONFIG TESTS
+    // ========================================================================
+
+    #[test]
+    fn test_z_layer_config_ordering() {
+        let z = ZLayerConfig::default();
+
+        assert!(z.grid < z.volume, "Grid should be behind volume");
+        assert!(z.volume < z.pane_borders, "Volume should be behind pane borders");
+        assert!(z.pane_borders < z.resize_grips, "Pane borders should be behind resize grips");
+        assert!(z.resize_grips < z.axis_labels, "Resize grips should be behind axis labels");
+        assert!(z.axis_labels < z.crosshair_lines, "Axis labels should be behind crosshair lines");
+        assert!(z.crosshair_lines < z.crosshair_labels, "Crosshair lines should be behind labels");
+    }
+}
