@@ -15,6 +15,9 @@ pub use crate::panes::{CrosshairEntities, Pane, PaneId, PaneManager, PaneType};
 // Re-export data types for backward compatibility
 pub use crate::data::{CandleData, ChartDatabase};
 
+// Re-export interaction types for backward compatibility
+pub use crate::interaction::{InteractionMode, InteractionState};
+
 // ============================================================================
 // SEPARATED RESOURCES (Decomposed from Chart god object)
 // ============================================================================
@@ -87,21 +90,6 @@ impl ChartMetadata {
     }
 }
 
-/// Interaction state
-#[derive(Resource, Default)]
-pub struct InteractionState {
-    pub mouse_pos: Vec2,
-    pub dragging: bool,
-    pub drag_start_pos: Vec2,
-
-    // Pane resize state
-    pub hover_resize_gap: Option<usize>,    // Which gap is being hovered
-    pub resizing_gap: Option<usize>,        // Which gap is being dragged
-    pub resize_start_heights: Vec<f32>,     // Original height_percent values
-
-    // Crosshair optimization: track last candle to debounce text updates
-    pub last_crosshair_candle_index: Option<usize>,
-}
 
 /// Volume pane toggle state
 #[derive(Resource)]

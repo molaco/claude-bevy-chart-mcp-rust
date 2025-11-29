@@ -444,7 +444,7 @@ pub fn render_resize_grips(
         let gap_center_y = (pane_bottom + next_pane_top) / 2.0;
 
         // Highlight grip if hovering or resizing this gap
-        let is_active = interaction.hover_resize_gap == Some(i) || interaction.resizing_gap == Some(i);
+        let is_active = interaction.mode.gap_index() == Some(i);
         let grip_color = if is_active {
             theme.resize_grip_active
         } else {
@@ -626,9 +626,8 @@ pub fn update_crosshair(
     // Show cursor if: outside chart, dragging, or resizing
     // Hide cursor only when: in chart AND not interacting
     let should_hide_cursor = mouse_in_chart
-        && !interaction.dragging
-        && interaction.hover_resize_gap.is_none()
-        && interaction.resizing_gap.is_none();
+        && !interaction.mode.is_active()
+        && !interaction.mode.is_hovering_gap();
 
     for mut cursor in cursor_options.iter_mut() {
         cursor.visible = !should_hide_cursor;

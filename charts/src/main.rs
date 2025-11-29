@@ -13,7 +13,11 @@ use bevy::prelude::*;
 use bevy::render::view::screenshot::{save_to_disk, Screenshot};
 use bevy::window::{PresentMode, WindowResolution};
 use config::{ChartDimensions, ChartTheme, InteractionConfig, ZLayerConfig};
-use interaction::*;
+use interaction::{
+    check_lazy_load, handle_pan, handle_resize, handle_zoom,
+    toggle_sma_indicators, toggle_volume_pane, update_cursor_icon,
+    update_cursor_position, update_interaction_mode, InteractionState,
+};
 use rendering::*;
 use rendering::{CandlestickInstancedPlugin, InstancingEnabled};
 use types::*;
@@ -71,10 +75,19 @@ fn main() {
         .add_systems(Startup, setup)
         .add_systems(Startup, setup_fps_counter.after(setup))
         // Input systems - handle user interaction first
+        // Order: cursor position → state transitions → state handlers → keyboard
         .add_systems(
             Update,
             (
-                handle_mouse_input,
+                // First: update cursor position
+                update_cursor_position,
+                // Second: determine state transitions
+                update_interaction_mode.after(update_cursor_position),
+                // Third: process current state handlers
+                (handle_pan, handle_resize, handle_zoom).after(update_interaction_mode),
+                // Fourth: update cursor icon based on state
+                update_cursor_icon.after(update_interaction_mode),
+                // Keyboard handlers (independent of mouse state)
                 toggle_volume_pane,
                 toggle_sma_indicators,
                 screenshot_on_keypress,
