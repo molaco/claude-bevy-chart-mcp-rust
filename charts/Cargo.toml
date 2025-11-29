@@ -5,18 +5,11 @@ edition.workspace = true
 
 [dependencies]
 bevy = { version = "0.17.2", default-features = false, features = [
-    "bevy_winit",
-    "bevy_render",
-    "bevy_core_pipeline",
-    "bevy_sprite",
-    "bevy_text",
-    "bevy_ui",
-    "bevy_gizmos",
-    "default_font",
-    "png",
-    "wayland",
-    "x11",
-] }
+  "bevy_winit", "bevy_render", "bevy_core_pipeline",
+  "bevy_sprite", "bevy_sprite_render",  # ADD: bevy_sprite_render
+  "bevy_text", "bevy_ui", "bevy_ui_render",  # ADD: bevy_ui_render
+  "bevy_gizmos", "default_font", "png", "wayland", "x11"
+]}
 duckdb = "1.1"
 chrono = "0.4"
 bytemuck = { version = "1.21", features = ["derive"] }

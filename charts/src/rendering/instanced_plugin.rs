@@ -35,7 +35,7 @@ use bevy::render::{
     },
     renderer::{RenderContext, RenderDevice, RenderQueue},
     view::ViewTarget,
-    Extract, ExtractSchedule, Render, RenderApp, RenderSet,
+    Extract, ExtractSchedule, Render, RenderApp, RenderSystems,
 };
 use bevy::window::Window;
 
@@ -698,7 +698,7 @@ impl Plugin for CandlestickInstancedPlugin {
             // Add extract system to populate render world data
             .add_systems(ExtractSchedule, extract_candles_instanced)
             // Add prepare system to create/update GPU buffers
-            .add_systems(Render, prepare_candles_instanced.in_set(RenderSet::Prepare))
+            .add_systems(Render, prepare_candles_instanced.in_set(RenderSystems::PrepareResources))
             // Add render graph node
             .add_render_graph_node::<ViewNodeRunner<CandlestickNode>>(
                 Core2d,
