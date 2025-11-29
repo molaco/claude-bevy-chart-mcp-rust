@@ -9,6 +9,7 @@ use bevy::render::view::window::screenshot::ScreenshotManager;
 use types::*;
 use rendering::*;
 use interaction::*;
+use rendering::{CandlestickInstancedPlugin, InstancingEnabled};
 
 // ============================================================================
 // MAIN
@@ -26,6 +27,7 @@ fn main() {
             ..default()
         }))
         .add_plugins(FrameTimeDiagnosticsPlugin)
+        .add_plugins(CandlestickInstancedPlugin)
         .add_systems(Startup, setup)
         .add_systems(Startup, setup_fps_counter)
         .add_systems(Update, (
@@ -39,7 +41,7 @@ fn main() {
         .add_systems(Update, update_fps_counter)
         .add_systems(Update, (
             render_grid_and_axes,
-            render_candlesticks,
+            // render_candlesticks,  // Disabled - using GPU instancing instead
             render_moving_averages,
             render_volume_bars,
             reset_redraw_flag,
@@ -161,6 +163,8 @@ fn setup(mut commands: Commands) {
     commands.insert_resource(Crosshair::default());
     commands.insert_resource(VolumeToggleState::default());
     commands.insert_resource(ScreenshotCounter::default());
+    commands.insert_resource(ChartColors::default());
+    commands.insert_resource(InstancingEnabled::default());
 
     println!("Setup complete! Press 'V' to toggle volume pane, 'F' to take screenshot.");
 }

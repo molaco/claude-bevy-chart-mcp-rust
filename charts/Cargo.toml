@@ -19,3 +19,4 @@ bevy = { version = "0.14", default-features = false, features = [
 ] }
 duckdb = "1.1"
 chrono = "0.4"
+bytemuck = { version = "1.21", features = ["derive"] }

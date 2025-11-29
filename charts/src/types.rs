@@ -749,6 +749,24 @@ impl Default for Crosshair {
     }
 }
 
+/// Chart color theme
+#[derive(Resource, Clone)]
+pub struct ChartColors {
+    pub bull_candle: Color,
+    pub bear_candle: Color,
+    pub wick: Color,
+}
+
+impl Default for ChartColors {
+    fn default() -> Self {
+        Self {
+            bull_candle: Color::srgb(0.0, 0.8, 0.2),  // Green
+            bear_candle: Color::srgb(0.9, 0.2, 0.2),  // Red
+            wick: Color::srgb(0.5, 0.5, 0.5),         // Gray
+        }
+    }
+}
+
 /// Persistent crosshair entities (created once, updated every frame)
 #[derive(Resource)]
 pub struct CrosshairEntities {
