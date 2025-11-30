@@ -15,7 +15,7 @@
 //! - `CandlePipeline`: Cached render pipeline and bind group layout
 //! - `InstancingEnabled`: Toggle for enabling/disabling GPU instancing
 
-use super::instancing::{CandleInstance, ViewUniform};
+use super::instancing::{CandleInstance, ChartConfig, ViewUniform};
 use crate::types::{CandleData, ChartColors, PaneManager, ViewportState};
 use bevy::asset::AssetServer;
 use bevy::core_pipeline::core_2d::graph::{Core2d, Node2d};
@@ -136,6 +136,22 @@ pub struct CandleRenderData {
 
     /// Last viewport height used to create view buffer (for change detection)
     pub last_viewport_height: f32,
+
+    // Color tracking for change detection
+    /// Last bullish candle color
+    pub last_bull_color: [f32; 4],
+
+    /// Last bearish candle color
+    pub last_bear_color: [f32; 4],
+
+    /// Last wick color
+    pub last_wick_color: [f32; 4],
+
+    /// Whether bind group is valid (avoids recreation every frame)
+    pub bind_group_valid: bool,
+
+    /// GPU buffer containing ChartConfig data
+    pub config_buffer: Option<Buffer>,
 }
 
 /// Resource containing the cached render pipeline and bind group layout
@@ -380,7 +396,7 @@ fn prepare_candles_instanced(
         );
     }
 
-    // A. Create/update instance buffer
+    // A. Create/update instance buffer (only when data changed)
     let instance_data: &[u8] = bytemuck::cast_slice(&extracted.instances);
     let required_size = instance_data.len();
 
@@ -394,53 +410,107 @@ fn prepare_candles_instanced(
             },
         ));
         render_data.buffer_capacity = required_size;
-    } else if let Some(buffer) = &render_data.instance_buffer {
-        // Reuse existing buffer, just write new data
-        render_queue.write_buffer(buffer, 0, instance_data);
+    } else if extracted.instances_changed {
+        // Only write to GPU when instance data actually changed
+        if let Some(buffer) = &render_data.instance_buffer {
+            render_queue.write_buffer(buffer, 0, instance_data);
+        }
     }
 
-    // B. Build view uniform
-    let view_uniform = ViewUniform {
-        view_proj: build_orthographic_matrix(extracted.viewport_width, extracted.viewport_height),
-        viewport: [
-            0.0,
-            0.0,
-            extracted.viewport_width,
-            extracted.viewport_height,
-        ],
-        bull_color: extracted.bull_color,
-        bear_color: extracted.bear_color,
-        wick_color: extracted.wick_color,
-    };
+    // B. Check if view uniform actually changed
+    let viewport_changed =
+        (render_data.last_viewport_width - extracted.viewport_width).abs() > 0.1
+            || (render_data.last_viewport_height - extracted.viewport_height).abs() > 0.1;
 
-    let uniform_data: &[u8] = bytemuck::bytes_of(&view_uniform);
+    let colors_changed = render_data.last_bull_color != extracted.bull_color
+        || render_data.last_bear_color != extracted.bear_color
+        || render_data.last_wick_color != extracted.wick_color;
 
-    // C. Create or update uniform buffer
-    if render_data.view_uniform_buffer.is_none() {
-        render_data.view_uniform_buffer = Some(render_device.create_buffer_with_data(
+    let view_uniform_changed =
+        viewport_changed || colors_changed || render_data.view_uniform_buffer.is_none();
+
+    // C. Build and update view uniform only when changed
+    if view_uniform_changed {
+        let view_uniform = ViewUniform {
+            view_proj: build_orthographic_matrix(
+                extracted.viewport_width,
+                extracted.viewport_height,
+            ),
+            viewport: [
+                0.0,
+                0.0,
+                extracted.viewport_width,
+                extracted.viewport_height,
+            ],
+            bull_color: extracted.bull_color,
+            bear_color: extracted.bear_color,
+            wick_color: extracted.wick_color,
+        };
+
+        let uniform_data: &[u8] = bytemuck::bytes_of(&view_uniform);
+
+        if render_data.view_uniform_buffer.is_none() {
+            render_data.view_uniform_buffer = Some(render_device.create_buffer_with_data(
+                &BufferInitDescriptor {
+                    label: Some("candlestick_view_uniform_buffer"),
+                    contents: uniform_data,
+                    usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+                },
+            ));
+            render_data.bind_group_valid = false; // Need new bind group
+        } else if let Some(buffer) = &render_data.view_uniform_buffer {
+            render_queue.write_buffer(buffer, 0, uniform_data);
+        }
+
+        // Update tracking state
+        render_data.last_viewport_width = extracted.viewport_width;
+        render_data.last_viewport_height = extracted.viewport_height;
+        render_data.last_bull_color = extracted.bull_color;
+        render_data.last_bear_color = extracted.bear_color;
+        render_data.last_wick_color = extracted.wick_color;
+    }
+
+    // D. Create config buffer (once, never changes)
+    if render_data.config_buffer.is_none() {
+        let config = ChartConfig::default();
+        let config_data: &[u8] = bytemuck::bytes_of(&config);
+        render_data.config_buffer = Some(render_device.create_buffer_with_data(
             &BufferInitDescriptor {
-                label: Some("candlestick_view_uniform_buffer"),
-                contents: uniform_data,
+                label: Some("candlestick_config_buffer"),
+                contents: config_data,
                 usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
             },
         ));
-    } else if let Some(buffer) = &render_data.view_uniform_buffer {
-        render_queue.write_buffer(buffer, 0, uniform_data);
+        render_data.bind_group_valid = false; // Force bind group recreation
     }
 
-    // D. Create bind group (if buffers exist)
-    if let Some(view_buffer) = &render_data.view_uniform_buffer {
-        render_data.bind_group = Some(render_device.create_bind_group(
-            Some("candlestick_bind_group"),
-            &pipeline.bind_group_layout,
-            &[BindGroupEntry {
-                binding: 0,
-                resource: view_buffer.as_entire_binding(),
-            }],
-        ));
+    // E. Create bind group only when needed (buffer recreated or not valid)
+    if let (Some(view_buffer), Some(config_buffer)) =
+        (&render_data.view_uniform_buffer, &render_data.config_buffer)
+    {
+        let needs_bind_group =
+            render_data.bind_group.is_none() || !render_data.bind_group_valid;
+
+        if needs_bind_group {
+            render_data.bind_group = Some(render_device.create_bind_group(
+                Some("candlestick_bind_group"),
+                &pipeline.bind_group_layout,
+                &[
+                    BindGroupEntry {
+                        binding: 0,
+                        resource: view_buffer.as_entire_binding(),
+                    },
+                    BindGroupEntry {
+                        binding: 1,
+                        resource: config_buffer.as_entire_binding(),
+                    },
+                ],
+            ));
+            render_data.bind_group_valid = true;
+        }
     }
 
-    // E. Update instance count
+    // F. Update instance count
     render_data.instance_count = extracted.instances.len() as u32;
 
     // Debug: confirm buffer creation
@@ -732,16 +802,30 @@ impl Plugin for CandlestickInstancedPlugin {
         // Create bind group layout for ViewUniform
         let bind_group_layout = render_device.create_bind_group_layout(
             Some("candlestick_bind_group_layout"),
-            &[BindGroupLayoutEntry {
-                binding: 0,
-                visibility: ShaderStages::VERTEX,
-                ty: BindingType::Buffer {
-                    ty: BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
+            &[
+                // Binding 0: ViewUniform
+                BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: ShaderStages::VERTEX,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
                 },
-                count: None,
-            }],
+                // Binding 1: ChartConfig
+                BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: ShaderStages::VERTEX,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
         );
 
         // Load shader

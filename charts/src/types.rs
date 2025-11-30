@@ -10,7 +10,7 @@ pub use crate::indicators::{IndicatorState, MovingAverage};
 pub use crate::coordinate::{right_spacing_candles, ChartSpace, ViewportState};
 
 // Re-export panes types for backward compatibility
-pub use crate::panes::{CrosshairEntities, Pane, PaneId, PaneManager, PaneType};
+pub use crate::panes::{CrosshairEntities, GridBorderEntities, Pane, PaneId, PaneManager, PaneType};
 
 // Re-export data types for backward compatibility
 pub use crate::data::{CandleData, ChartDatabase};
@@ -200,43 +200,6 @@ impl Default for ChartColors {
 // ============================================================================
 // COMPONENTS
 // ============================================================================
-
-/// Component to identify candlestick parts
-#[derive(Component)]
-pub struct CandlestickWick {
-    pub candle_index: usize,
-}
-
-#[derive(Component)]
-pub struct CandlestickBody {
-    pub candle_index: usize,
-}
-
-/// Component to identify volume bars
-#[derive(Component)]
-pub struct VolumeBar {
-    pub candle_index: usize,
-}
-
-/// Marker component for chart elements
-#[derive(Component)]
-pub struct ChartElement;
-
-/// Marker component for price pane elements (candlestick wicks and bodies)
-#[derive(Component)]
-pub struct PriceElement;
-
-/// Marker component for volume pane elements (volume bars)
-#[derive(Component)]
-pub struct VolumeElement;
-
-/// Marker component for indicator elements (MA lines, etc.)
-#[derive(Component)]
-pub struct IndicatorElement;
-
-/// Marker component for grid elements (lines and labels) - LEGACY, prefer specific markers
-#[derive(Component)]
-pub struct GridElement;
 
 /// Marker component for grid lines only (horizontal and vertical)
 #[derive(Component)]

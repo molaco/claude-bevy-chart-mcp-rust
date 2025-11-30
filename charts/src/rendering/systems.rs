@@ -1,4 +1,5 @@
 use crate::config::{ChartDimensions, ChartTheme, ZLayerConfig};
+use crate::panes::GridBorderEntities;
 use crate::types::*;
 use bevy::prelude::*;
 use bevy::window::CursorOptions;
@@ -7,91 +8,6 @@ use chrono::{DateTime, Utc};
 // ============================================================================
 // RENDERING SYSTEMS
 // ============================================================================
-
-pub fn render_volume_bars(
-    mut commands: Commands,
-    viewport: Res<ViewportState>,
-    pane_manager: Res<PaneManager>,
-    candle_data: Res<CandleData>,
-    theme: Res<ChartTheme>,
-    dimensions: Res<ChartDimensions>,
-    z_layers: Res<ZLayerConfig>,
-    query: Query<Entity, With<VolumeElement>>,
-) {
-    if !viewport.needs_redraw {
-        return;
-    }
-
-    // Despawn all existing volume bars
-    for entity in query.iter() {
-        commands.entity(entity).despawn();
-    }
-
-    // Find the Volume pane
-    let volume_pane = match pane_manager.find_pane(PaneId::Volume) {
-        Some(pane) => pane,
-        None => return,
-    };
-
-    // Get shared X-axis state
-    let start = viewport.visible_candle_start;
-    let end = (start + viewport.visible_candle_count).min(candle_data.candles.len());
-
-    if start >= end {
-        return;
-    }
-
-    for i in start..end {
-        let candle = &candle_data.candles[i];
-
-        // Calculate bottom (0) and top (volume) positions
-        let bar_bottom = volume_pane.space.to_world(
-            i,
-            0.0,
-            viewport.visible_candle_start,
-            viewport.visible_candle_count,
-        );
-        let bar_top = volume_pane.space.to_world(
-            i,
-            candle.volume as f32,
-            viewport.visible_candle_start,
-            viewport.visible_candle_count,
-        );
-
-        let bar_center = Vec2::new(
-            (bar_bottom.x + bar_top.x) / 2.0,
-            (bar_bottom.y + bar_top.y) / 2.0,
-        );
-        let bar_height = (bar_top.y - bar_bottom.y).abs().max(dimensions.min_element_height);
-        let bar_width = volume_pane.space.candle_width_px * dimensions.body_width_ratio;
-
-        // Color based on candle direction (using theme colors)
-        let bar_color = if candle.close >= candle.open {
-            theme.bull_volume
-        } else {
-            theme.bear_volume
-        };
-
-        commands.spawn((
-            Sprite {
-                color: bar_color,
-                custom_size: Some(Vec2::new(bar_width, bar_height)),
-                ..default()
-            },
-            Transform::from_translation(bar_center.extend(z_layers.volume)),
-            VolumeBar { candle_index: i },
-            VolumeElement,
-            PaneId::Volume,
-        ));
-    }
-
-    println!(
-        "Rendered {} volume bars (indices {}-{})",
-        end - start,
-        start,
-        end - 1
-    );
-}
 
 /// Initialize persistent crosshair entities (called once at startup from setup)
 /// Note: This is called from setup before config resources are inserted, so we use constants directly
@@ -243,92 +159,191 @@ pub fn init_crosshair(commands: &mut Commands, pane_manager: &PaneManager) {
 // ============================================================================
 
 /// Render horizontal and vertical grid lines within each pane
+/// Uses persistent entities to avoid despawn/respawn overhead
 pub fn render_grid_lines(
     mut commands: Commands,
     viewport_state: Res<ViewportState>,
     pane_manager: Res<PaneManager>,
-    candle_data: Res<CandleData>,
+    _candle_data: Res<CandleData>,
     grid: Res<ChartGrid>,
     z_layers: Res<ZLayerConfig>,
-    query: Query<Entity, With<GridLineElement>>,
+    mut grid_entities: ResMut<GridBorderEntities>,
+    mut transforms: Query<&mut Transform>,
+    mut sprites: Query<&mut Sprite>,
+    mut visibilities: Query<&mut Visibility>,
 ) {
     use crate::config;
 
-    if !viewport_state.needs_redraw {
+    if !viewport_state.needs_redraw && grid_entities.initialized {
         return;
     }
 
-    // Despawn existing grid line elements
-    for entity in query.iter() {
-        commands.entity(entity).despawn();
-    }
-
-    if !grid.show_grid || pane_manager.panes.is_empty() {
+    if pane_manager.panes.is_empty() {
         return;
     }
+
+    // Check if layout changed (requires entity recreation)
+    let layout_changed = !grid_entities.initialized
+        || grid_entities.y_tick_count != grid.y_tick_count
+        || grid_entities.x_tick_count != grid.x_tick_count
+        || grid_entities.horizontal_grid_lines.len() != pane_manager.panes.len();
 
     // Calculate chart bounds
     let first_pane = &pane_manager.panes[0];
     let chart_left = first_pane.space.viewport.min.x;
     let chart_right = first_pane.space.viewport.max.x;
+    let line_width = chart_right - chart_left;
 
-    // ========== HORIZONTAL GRID LINES (per pane) ==========
-    for pane in &pane_manager.panes {
-        let viewport = &pane.space.viewport;
-
-        for i in 0..=grid.y_tick_count {
-            let value_percent = i as f32 / grid.y_tick_count as f32;
-            let y = viewport.min.y + value_percent * viewport.height();
-
-            // Draw horizontal line
-            let line_center = Vec2::new((chart_left + chart_right) / 2.0, y);
-            let line_width = chart_right - chart_left;
-
-            commands.spawn((
-                Sprite {
-                    color: grid.grid_color,
-                    custom_size: Some(Vec2::new(line_width, config::GRID_LINE_THICKNESS)),
-                    ..default()
-                },
-                Transform::from_translation(line_center.extend(z_layers.grid)),
-                GridLineElement,
-            ));
-        }
-    }
-
-    // ========== VERTICAL GRID LINES (per pane) ==========
-    for pane in &pane_manager.panes {
-        let viewport = &pane.space.viewport;
-
-        for i in 0..=grid.x_tick_count {
-            let candle_percent = i as f32 / grid.x_tick_count as f32;
-            let candle_index = viewport_state.visible_candle_start
-                + (candle_percent * viewport_state.visible_candle_count as f32) as usize;
-
-            if candle_index >= candle_data.candles.len() {
-                continue;
+    if layout_changed {
+        // Despawn existing entities
+        for (_, entities) in &grid_entities.horizontal_grid_lines {
+            for &entity in entities {
+                commands.entity(entity).despawn();
             }
+        }
+        for &entity in &grid_entities.vertical_grid_lines {
+            commands.entity(entity).despawn();
+        }
+        grid_entities.horizontal_grid_lines.clear();
+        grid_entities.vertical_grid_lines.clear();
 
-            let x = chart_left + candle_percent * (chart_right - chart_left);
+        // Create new horizontal grid lines
+        for pane in &pane_manager.panes {
+            let viewport = &pane.space.viewport;
+            let mut pane_lines = Vec::new();
 
-            // Draw vertical line within this pane only
-            let line_center = Vec2::new(x, viewport.center().y);
+            for i in 0..=grid.y_tick_count {
+                let value_percent = i as f32 / grid.y_tick_count as f32;
+                let y = viewport.min.y + value_percent * viewport.height();
+                let line_center = Vec2::new((chart_left + chart_right) / 2.0, y);
+
+                let visibility = if grid.show_grid {
+                    Visibility::Visible
+                } else {
+                    Visibility::Hidden
+                };
+
+                let entity = commands
+                    .spawn((
+                        Sprite {
+                            color: grid.grid_color,
+                            custom_size: Some(Vec2::new(line_width, config::GRID_LINE_THICKNESS)),
+                            ..default()
+                        },
+                        Transform::from_translation(line_center.extend(z_layers.grid)),
+                        visibility,
+                        GridLineElement,
+                    ))
+                    .id();
+                pane_lines.push(entity);
+            }
+            grid_entities
+                .horizontal_grid_lines
+                .push((pane.id, pane_lines));
+        }
+
+        // Create new vertical grid lines (one set per pane)
+        for pane in &pane_manager.panes {
+            let viewport = &pane.space.viewport;
+
+            for i in 0..=grid.x_tick_count {
+                let candle_percent = i as f32 / grid.x_tick_count as f32;
+                let x = chart_left + candle_percent * (chart_right - chart_left);
+                let line_center = Vec2::new(x, viewport.center().y);
+                let line_height = viewport.height();
+
+                let visibility = if grid.show_grid {
+                    Visibility::Visible
+                } else {
+                    Visibility::Hidden
+                };
+
+                let entity = commands
+                    .spawn((
+                        Sprite {
+                            color: grid.grid_color,
+                            custom_size: Some(Vec2::new(
+                                config::GRID_LINE_THICKNESS,
+                                line_height,
+                            )),
+                            ..default()
+                        },
+                        Transform::from_translation(line_center.extend(z_layers.grid)),
+                        visibility,
+                        GridLineElement,
+                    ))
+                    .id();
+                grid_entities.vertical_grid_lines.push(entity);
+            }
+        }
+
+        grid_entities.y_tick_count = grid.y_tick_count;
+        grid_entities.x_tick_count = grid.x_tick_count;
+        grid_entities.initialized = true;
+    } else {
+        // Update existing entities
+        let visibility = if grid.show_grid {
+            Visibility::Visible
+        } else {
+            Visibility::Hidden
+        };
+
+        // Update horizontal grid lines
+        for (pane_id, entities) in &grid_entities.horizontal_grid_lines {
+            if let Some(pane) = pane_manager.find_pane(*pane_id) {
+                let viewport = &pane.space.viewport;
+                for (i, &entity) in entities.iter().enumerate() {
+                    let value_percent = i as f32 / grid.y_tick_count as f32;
+                    let y = viewport.min.y + value_percent * viewport.height();
+
+                    if let Ok(mut transform) = transforms.get_mut(entity) {
+                        transform.translation.x = (chart_left + chart_right) / 2.0;
+                        transform.translation.y = y;
+                    }
+                    if let Ok(mut sprite) = sprites.get_mut(entity) {
+                        sprite.custom_size = Some(Vec2::new(line_width, config::GRID_LINE_THICKNESS));
+                        sprite.color = grid.grid_color;
+                    }
+                    if let Ok(mut vis) = visibilities.get_mut(entity) {
+                        *vis = visibility;
+                    }
+                }
+            }
+        }
+
+        // Update vertical grid lines
+        let mut line_idx = 0;
+        for pane in &pane_manager.panes {
+            let viewport = &pane.space.viewport;
             let line_height = viewport.height();
 
-            commands.spawn((
-                Sprite {
-                    color: grid.grid_color,
-                    custom_size: Some(Vec2::new(config::GRID_LINE_THICKNESS, line_height)),
-                    ..default()
-                },
-                Transform::from_translation(line_center.extend(z_layers.grid)),
-                GridLineElement,
-            ));
+            for i in 0..=grid.x_tick_count {
+                if line_idx >= grid_entities.vertical_grid_lines.len() {
+                    break;
+                }
+                let entity = grid_entities.vertical_grid_lines[line_idx];
+                let candle_percent = i as f32 / grid.x_tick_count as f32;
+                let x = chart_left + candle_percent * (chart_right - chart_left);
+
+                if let Ok(mut transform) = transforms.get_mut(entity) {
+                    transform.translation.x = x;
+                    transform.translation.y = viewport.center().y;
+                }
+                if let Ok(mut sprite) = sprites.get_mut(entity) {
+                    sprite.custom_size = Some(Vec2::new(config::GRID_LINE_THICKNESS, line_height));
+                    sprite.color = grid.grid_color;
+                }
+                if let Ok(mut vis) = visibilities.get_mut(entity) {
+                    *vis = visibility;
+                }
+                line_idx += 1;
+            }
         }
     }
 }
 
 /// Render borders around each pane (panel-style separation)
+/// Uses persistent entities to avoid despawn/respawn overhead
 pub fn render_pane_borders(
     mut commands: Commands,
     viewport_state: Res<ViewportState>,
@@ -336,15 +351,12 @@ pub fn render_pane_borders(
     theme: Res<ChartTheme>,
     dimensions: Res<ChartDimensions>,
     z_layers: Res<ZLayerConfig>,
-    query: Query<Entity, With<PaneBorderElement>>,
+    mut grid_entities: ResMut<GridBorderEntities>,
+    mut transforms: Query<&mut Transform>,
+    mut sprites: Query<&mut Sprite>,
 ) {
-    if !viewport_state.needs_redraw {
+    if !viewport_state.needs_redraw && !grid_entities.pane_borders.is_empty() {
         return;
-    }
-
-    // Despawn existing border elements
-    for entity in query.iter() {
-        commands.entity(entity).despawn();
     }
 
     if pane_manager.panes.is_empty() {
@@ -354,52 +366,142 @@ pub fn render_pane_borders(
     let border_color = theme.pane_border;
     let border_thickness = dimensions.border_thickness;
 
-    for pane in &pane_manager.panes {
-        let viewport = &pane.space.viewport;
+    // Check if layout changed (pane count differs)
+    let layout_changed = grid_entities.pane_borders.len() != pane_manager.panes.len();
 
-        // Top border
-        commands.spawn((
-            Sprite {
-                color: border_color,
-                custom_size: Some(Vec2::new(viewport.width(), border_thickness)),
-                ..default()
-            },
-            Transform::from_translation(Vec3::new(viewport.center().x, viewport.max.y, z_layers.pane_borders)),
-            PaneBorderElement,
-        ));
+    if layout_changed || grid_entities.pane_borders.is_empty() {
+        // Despawn existing border entities
+        for (_, entities) in &grid_entities.pane_borders {
+            for &entity in entities {
+                commands.entity(entity).despawn();
+            }
+        }
+        grid_entities.pane_borders.clear();
 
-        // Bottom border
-        commands.spawn((
-            Sprite {
-                color: border_color,
-                custom_size: Some(Vec2::new(viewport.width(), border_thickness)),
-                ..default()
-            },
-            Transform::from_translation(Vec3::new(viewport.center().x, viewport.min.y, z_layers.pane_borders)),
-            PaneBorderElement,
-        ));
+        // Create new border entities for each pane
+        for pane in &pane_manager.panes {
+            let viewport = &pane.space.viewport;
 
-        // Left border
-        commands.spawn((
-            Sprite {
-                color: border_color,
-                custom_size: Some(Vec2::new(border_thickness, viewport.height())),
-                ..default()
-            },
-            Transform::from_translation(Vec3::new(viewport.min.x, viewport.center().y, z_layers.pane_borders)),
-            PaneBorderElement,
-        ));
+            // Top border (index 0)
+            let top = commands
+                .spawn((
+                    Sprite {
+                        color: border_color,
+                        custom_size: Some(Vec2::new(viewport.width(), border_thickness)),
+                        ..default()
+                    },
+                    Transform::from_translation(Vec3::new(
+                        viewport.center().x,
+                        viewport.max.y,
+                        z_layers.pane_borders,
+                    )),
+                    PaneBorderElement,
+                ))
+                .id();
 
-        // Right border
-        commands.spawn((
-            Sprite {
-                color: border_color,
-                custom_size: Some(Vec2::new(border_thickness, viewport.height())),
-                ..default()
-            },
-            Transform::from_translation(Vec3::new(viewport.max.x, viewport.center().y, z_layers.pane_borders)),
-            PaneBorderElement,
-        ));
+            // Bottom border (index 1)
+            let bottom = commands
+                .spawn((
+                    Sprite {
+                        color: border_color,
+                        custom_size: Some(Vec2::new(viewport.width(), border_thickness)),
+                        ..default()
+                    },
+                    Transform::from_translation(Vec3::new(
+                        viewport.center().x,
+                        viewport.min.y,
+                        z_layers.pane_borders,
+                    )),
+                    PaneBorderElement,
+                ))
+                .id();
+
+            // Left border (index 2)
+            let left = commands
+                .spawn((
+                    Sprite {
+                        color: border_color,
+                        custom_size: Some(Vec2::new(border_thickness, viewport.height())),
+                        ..default()
+                    },
+                    Transform::from_translation(Vec3::new(
+                        viewport.min.x,
+                        viewport.center().y,
+                        z_layers.pane_borders,
+                    )),
+                    PaneBorderElement,
+                ))
+                .id();
+
+            // Right border (index 3)
+            let right = commands
+                .spawn((
+                    Sprite {
+                        color: border_color,
+                        custom_size: Some(Vec2::new(border_thickness, viewport.height())),
+                        ..default()
+                    },
+                    Transform::from_translation(Vec3::new(
+                        viewport.max.x,
+                        viewport.center().y,
+                        z_layers.pane_borders,
+                    )),
+                    PaneBorderElement,
+                ))
+                .id();
+
+            grid_entities
+                .pane_borders
+                .push((pane.id, [top, bottom, left, right]));
+        }
+    } else {
+        // Update existing border entities in-place
+        for (pane_id, entities) in &grid_entities.pane_borders {
+            if let Some(pane) = pane_manager.find_pane(*pane_id) {
+                let viewport = &pane.space.viewport;
+                let [top, bottom, left, right] = *entities;
+
+                // Update top border
+                if let Ok(mut transform) = transforms.get_mut(top) {
+                    transform.translation.x = viewport.center().x;
+                    transform.translation.y = viewport.max.y;
+                }
+                if let Ok(mut sprite) = sprites.get_mut(top) {
+                    sprite.custom_size = Some(Vec2::new(viewport.width(), border_thickness));
+                    sprite.color = border_color;
+                }
+
+                // Update bottom border
+                if let Ok(mut transform) = transforms.get_mut(bottom) {
+                    transform.translation.x = viewport.center().x;
+                    transform.translation.y = viewport.min.y;
+                }
+                if let Ok(mut sprite) = sprites.get_mut(bottom) {
+                    sprite.custom_size = Some(Vec2::new(viewport.width(), border_thickness));
+                    sprite.color = border_color;
+                }
+
+                // Update left border
+                if let Ok(mut transform) = transforms.get_mut(left) {
+                    transform.translation.x = viewport.min.x;
+                    transform.translation.y = viewport.center().y;
+                }
+                if let Ok(mut sprite) = sprites.get_mut(left) {
+                    sprite.custom_size = Some(Vec2::new(border_thickness, viewport.height()));
+                    sprite.color = border_color;
+                }
+
+                // Update right border
+                if let Ok(mut transform) = transforms.get_mut(right) {
+                    transform.translation.x = viewport.max.x;
+                    transform.translation.y = viewport.center().y;
+                }
+                if let Ok(mut sprite) = sprites.get_mut(right) {
+                    sprite.custom_size = Some(Vec2::new(border_thickness, viewport.height()));
+                    sprite.color = border_color;
+                }
+            }
+        }
     }
 }
 

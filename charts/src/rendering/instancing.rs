@@ -315,6 +315,63 @@ const _: () = {
     );
 };
 
+/// GPU-compatible shader configuration (16 bytes)
+///
+/// This struct contains configurable parameters for the candlestick shader,
+/// allowing runtime adjustment of rendering properties without shader recompilation.
+///
+/// # Memory Layout (16 bytes)
+/// - wick_width_ratio: Wick width as fraction of candle width (default: 0.15)
+/// - min_wick_width: Minimum wick width in pixels (default: 2.0)
+/// - min_element_height: Minimum height for body/wick in pixels (default: 1.0)
+/// - _padding: Padding for 16-byte alignment
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Pod, Zeroable)]
+pub struct ChartConfig {
+    /// Wick width as a fraction of candle body width (0.0-1.0)
+    pub wick_width_ratio: f32,
+
+    /// Minimum wick width in pixels
+    pub min_wick_width: f32,
+
+    /// Minimum element height in pixels (for body and wick)
+    pub min_element_height: f32,
+
+    /// Padding for 16-byte GPU alignment
+    pub _padding: f32,
+}
+
+// Compile-time assertion to verify ChartConfig is exactly 16 bytes
+const _: () = {
+    assert!(
+        std::mem::size_of::<ChartConfig>() == 16,
+        "ChartConfig must be exactly 16 bytes"
+    );
+};
+
+impl Default for ChartConfig {
+    fn default() -> Self {
+        Self {
+            wick_width_ratio: 0.15,
+            min_wick_width: 2.0,
+            min_element_height: 1.0,
+            _padding: 0.0,
+        }
+    }
+}
+
+impl ChartConfig {
+    /// Create a new ChartConfig with custom values
+    pub fn new(wick_width_ratio: f32, min_wick_width: f32, min_element_height: f32) -> Self {
+        Self {
+            wick_width_ratio,
+            min_wick_width,
+            min_element_height,
+            _padding: 0.0,
+        }
+    }
+}
+
 impl ViewUniform {
     /// Create a new ViewUniform with identity matrix and default colors
     ///
@@ -376,6 +433,97 @@ impl ViewUniform {
         self.bear_color = bear_color;
         self.wick_color = wick_color;
         self
+    }
+}
+
+/// GPU-compatible instance data for a single volume bar (32 bytes)
+///
+/// This struct is designed for instanced rendering of volume bars on the GPU.
+/// It stores absolute world coordinates for proper positioning.
+///
+/// # Memory Layout (32 bytes total)
+/// - x_position: horizontal position (bar center)
+/// - width: bar width in pixels
+/// - y_bottom: bottom y position in world space
+/// - y_top: top y position in world space
+/// - is_bullish: 1.0 for bullish (green), 0.0 for bearish (red)
+/// - _padding: 3 floats to align to 32 bytes
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Pod, Zeroable)]
+pub struct VolumeInstance {
+    /// Horizontal position in world space (bar center)
+    pub x_position: f32,
+
+    /// Width of the volume bar in pixels
+    pub width: f32,
+
+    /// Bottom Y position in world space
+    pub y_bottom: f32,
+
+    /// Top Y position in world space
+    pub y_top: f32,
+
+    /// Bullish indicator: 1.0 = bullish (green), 0.0 = bearish (red)
+    pub is_bullish: f32,
+
+    /// Padding for 32-byte alignment
+    pub _padding0: f32,
+    pub _padding1: f32,
+    pub _padding2: f32,
+}
+
+// Compile-time assertion to verify VolumeInstance is exactly 32 bytes
+const _: () = {
+    assert!(
+        std::mem::size_of::<VolumeInstance>() == 32,
+        "VolumeInstance must be exactly 32 bytes"
+    );
+};
+
+impl VolumeInstance {
+    /// Create a new VolumeInstance
+    ///
+    /// # Arguments
+    /// * `x_position` - Horizontal position (bar center)
+    /// * `width` - Bar width in pixels
+    /// * `y_bottom` - Bottom Y position in world space
+    /// * `y_top` - Top Y position in world space
+    /// * `is_bullish` - True for bullish (green), false for bearish (red)
+    pub fn new(x_position: f32, width: f32, y_bottom: f32, y_top: f32, is_bullish: bool) -> Self {
+        Self {
+            x_position,
+            width,
+            y_bottom,
+            y_top,
+            is_bullish: if is_bullish { 1.0 } else { 0.0 },
+            _padding0: 0.0,
+            _padding1: 0.0,
+            _padding2: 0.0,
+        }
+    }
+
+    /// Returns the vertex buffer layout for VolumeInstance
+    ///
+    /// Uses two vec4 attributes:
+    /// - Location 0: (x_position, width, y_bottom, y_top)
+    /// - Location 1: (is_bullish, padding, padding, padding)
+    pub fn vertex_buffer_layout() -> VertexBufferLayout {
+        VertexBufferLayout {
+            array_stride: std::mem::size_of::<VolumeInstance>() as u64,
+            step_mode: VertexStepMode::Instance,
+            attributes: vec![
+                VertexAttribute {
+                    format: VertexFormat::Float32x4,
+                    offset: 0,
+                    shader_location: 0,
+                },
+                VertexAttribute {
+                    format: VertexFormat::Float32x4,
+                    offset: 16,
+                    shader_location: 1,
+                },
+            ],
+        }
     }
 }
 

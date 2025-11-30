@@ -5,10 +5,11 @@
 
 pub mod instancing;
 pub mod instanced_plugin;
+pub mod volume_instanced_plugin;
 pub mod systems;
 
 // Re-export key types for convenience
-pub use instancing::{CandleInstance, ViewUniform};
+pub use instancing::{CandleInstance, ChartConfig, ViewUniform, VolumeInstance};
 
 // Re-export plugin and resources
 pub use instanced_plugin::{
@@ -19,6 +20,16 @@ pub use instanced_plugin::{
     CandlePipeline,
     CandlestickInstancedLabel,
     CandlestickNode,
+};
+
+// Re-export volume plugin
+pub use volume_instanced_plugin::{
+    VolumeInstancedPlugin,
+    ExtractedVolumesInstanced,
+    VolumeRenderData,
+    VolumePipeline,
+    VolumeInstancedLabel,
+    VolumeNode,
 };
 
 // Re-export all rendering systems from systems module

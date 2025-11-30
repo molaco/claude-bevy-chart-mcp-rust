@@ -11,9 +11,9 @@ use charts::interaction::{
     toggle_sma_indicators, toggle_volume_pane, update_cursor_icon,
     update_cursor_position, update_interaction_mode, InteractionState,
 };
-use charts::panes::{Pane, PaneId, PaneManager, PaneType};
+use charts::panes::{GridBorderEntities, Pane, PaneId, PaneManager, PaneType};
 use charts::rendering::*;
-use charts::rendering::{CandlestickInstancedPlugin, InstancingEnabled};
+use charts::rendering::{CandlestickInstancedPlugin, InstancingEnabled, VolumeInstancedPlugin};
 use charts::types::*;
 
 // ============================================================================
@@ -55,6 +55,7 @@ fn main() {
         }))
         .add_plugins(FrameTimeDiagnosticsPlugin::default())
         .add_plugins(CandlestickInstancedPlugin)
+        .add_plugins(VolumeInstancedPlugin)
         // Configure system set ordering: Input -> StateUpdate -> Rendering -> Cleanup
         .configure_sets(
             Update,
@@ -100,6 +101,7 @@ fn main() {
         )
         // Rendering systems - draw based on current state
         // Split grid rendering into focused systems for better parallelization
+        // Note: Volume bars are now rendered via GPU instancing (VolumeInstancedPlugin)
         .add_systems(
             Update,
             (
@@ -110,7 +112,7 @@ fn main() {
                 render_axis_labels,
                 // Then render data elements
                 render_moving_averages,
-                render_volume_bars,
+                // render_volume_bars removed - now using GPU instancing
             )
                 .in_set(ChartSystems::Rendering),
         )
@@ -259,6 +261,7 @@ fn setup(mut commands: Commands) {
     commands.insert_resource(ScreenshotCounter::default());
     commands.insert_resource(chart_colors);
     commands.insert_resource(InstancingEnabled::default());
+    commands.insert_resource(GridBorderEntities::default());
 
     println!("Setup complete! Press 'V' to toggle volume pane, 'F' to take screenshot.");
 }

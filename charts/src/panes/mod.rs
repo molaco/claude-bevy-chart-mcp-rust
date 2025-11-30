@@ -11,6 +11,7 @@
 //! - [`PaneType`]: Content type for each pane
 //! - [`PaneManager`]: Bevy resource for managing multi-pane layout
 //! - [`CrosshairEntities`]: Persistent crosshair entity references
+//! - [`GridBorderEntities`]: Persistent grid and border entity references
 
 mod pane;
 mod manager;
@@ -18,4 +19,4 @@ mod entities;
 
 pub use pane::{Pane, PaneId, PaneType};
 pub use manager::PaneManager;
-pub use entities::CrosshairEntities;
+pub use entities::{CrosshairEntities, GridBorderEntities};

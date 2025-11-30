@@ -10,7 +10,15 @@ struct ViewUniform {
     wick_color: vec4<f32>,
 }
 
+struct ChartConfig {
+    wick_width_ratio: f32,    // Wick width as fraction of body width (default: 0.15)
+    min_wick_width: f32,      // Minimum wick width in pixels (default: 2.0)
+    min_element_height: f32,  // Minimum element height in pixels (default: 1.0)
+    _padding: f32,
+}
+
 @group(0) @binding(0) var<uniform> view: ViewUniform;
+@group(0) @binding(1) var<uniform> config: ChartConfig;
 
 struct VertexInput {
     @location(0) data0: vec4<f32>,  // (x_position, width, open, high)
@@ -68,8 +76,8 @@ fn vertex(
     var pos: vec2<f32>;
     var color: vec4<f32>;
 
-    // Calculate wick width (needed for body minimum)
-    let wick_width = max(width * 0.15, 2.0);
+    // Calculate wick width using config values
+    let wick_width = max(width * config.wick_width_ratio, config.min_wick_width);
 
     // Get normalized quad position using helper functions
     let quad_x = get_quad_x(local_vert);
@@ -80,7 +88,7 @@ fn vertex(
         let body_width = max(width, wick_width);
         let body_bottom = min(open, close);
         let body_top = max(open, close);
-        let body_height = max(body_top - body_bottom, 1.0);
+        let body_height = max(body_top - body_bottom, config.min_element_height);
 
         pos.x = x_position + quad_x * body_width;
         pos.y = body_bottom + quad_y * body_height;
@@ -96,7 +104,7 @@ fn vertex(
         let wick_height = high - low;
 
         pos.x = x_position + quad_x * wick_width;
-        pos.y = low + quad_y * max(wick_height, 1.0);
+        pos.y = low + quad_y * max(wick_height, config.min_element_height);
         color = view.wick_color;
     }
 
