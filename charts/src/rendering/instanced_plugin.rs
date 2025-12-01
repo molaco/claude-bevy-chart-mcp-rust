@@ -16,7 +16,9 @@
 //! - `InstancingEnabled`: Toggle for enabling/disabling GPU instancing
 
 use super::instancing::{CandleInstance, ChartConfig, ViewUniform};
+use super::triple_buffer::CandleTripleBuffer;
 use crate::types::{CandleData, ChartColors, PaneManager, ViewportState};
+use std::time::Instant;
 use bevy::asset::AssetServer;
 use bevy::core_pipeline::core_2d::graph::{Core2d, Node2d};
 use bevy::ecs::query::QueryItem;
@@ -26,8 +28,8 @@ use bevy::render::{
         NodeRunError, RenderGraphContext, RenderGraphExt, RenderLabel, ViewNode, ViewNodeRunner,
     },
     render_resource::{
-        BindGroup, BindGroupEntry, BindGroupLayout, BindGroupLayoutEntry, BindingType, BlendState,
-        Buffer, BufferBindingType, BufferInitDescriptor, BufferUsages, CachedRenderPipelineId,
+        BindGroupEntry, BindGroupLayout, BindGroupLayoutEntry, BindingType, BlendState,
+        BufferBindingType, BufferInitDescriptor, BufferUsages, CachedRenderPipelineId,
         ColorTargetState, ColorWrites, FragmentState, FrontFace, LoadOp, MultisampleState,
         Operations, PipelineCache, PolygonMode, PrimitiveState, PrimitiveTopology,
         RenderPassColorAttachment, RenderPassDescriptor, RenderPipelineDescriptor, ShaderStages,
@@ -95,63 +97,6 @@ pub struct ExtractedCandlesInstanced {
 
     /// Wick color in linear RGBA (typically gray)
     pub wick_color: [f32; 4],
-}
-
-/// Resource containing GPU buffers and bind groups for candlestick rendering
-///
-/// This resource manages the GPU-side data structures needed for instanced
-/// rendering. Buffers are created lazily and resized as needed to accommodate
-/// varying numbers of candlesticks.
-///
-/// # Buffer Management
-/// - Instance buffer: Grows to fit all instances, never shrinks
-/// - View uniform buffer: Fixed size (128 bytes for ViewUniform)
-/// - Capacity tracking: Avoids unnecessary reallocations
-///
-/// # Bind Groups
-/// The bind group references both the view uniform buffer and any textures/samplers
-/// needed for rendering. It must be recreated when buffers are resized.
-#[derive(Resource, Default)]
-pub struct CandleRenderData {
-    /// GPU buffer containing CandleInstance data
-    pub instance_buffer: Option<Buffer>,
-
-    /// Number of instances in the current buffer
-    pub instance_count: u32,
-
-    /// Allocated capacity of instance buffer (in instances, not bytes)
-    pub buffer_capacity: usize,
-
-    /// Bind group for view uniform and other resources
-    pub bind_group: Option<BindGroup>,
-
-    /// GPU buffer containing ViewUniform data
-    pub view_uniform_buffer: Option<Buffer>,
-
-    /// Allocated capacity of view uniform buffer (in ViewUniform structs)
-    pub view_buffer_capacity: usize,
-
-    /// Last viewport width used to create view buffer (for change detection)
-    pub last_viewport_width: f32,
-
-    /// Last viewport height used to create view buffer (for change detection)
-    pub last_viewport_height: f32,
-
-    // Color tracking for change detection
-    /// Last bullish candle color
-    pub last_bull_color: [f32; 4],
-
-    /// Last bearish candle color
-    pub last_bear_color: [f32; 4],
-
-    /// Last wick color
-    pub last_wick_color: [f32; 4],
-
-    /// Whether bind group is valid (avoids recreation every frame)
-    pub bind_group_valid: bool,
-
-    /// GPU buffer containing ChartConfig data
-    pub config_buffer: Option<Buffer>,
 }
 
 /// Resource containing the cached render pipeline and bind group layout
@@ -233,17 +178,23 @@ impl ViewNode for CandlestickNode {
         view_target: QueryItem<'w, 'w, Self::ViewQuery>,
         world: &'w World,
     ) -> Result<(), NodeRunError> {
-        // 1. Get render resources
-        let render_data = world.resource::<CandleRenderData>();
+        // 1. Get triple-buffered resources directly
+        let triple_buffer = world.resource::<CandleTripleBuffer>();
 
         // Skip if no instances to render
-        if render_data.instance_count == 0 {
+        if triple_buffer.resources.instance_count == 0 {
             return Ok(());
         }
 
-        // Get buffers and bind group (return early if not ready)
+        // Get the slot that was written to in prepare phase
+        // Since prepare calls complete_frame() which advances the counter,
+        // we look back 1 frame to find the slot containing current frame's data
+        let render_slot_index = triple_buffer.resources.index_frames_ago(1);
+        let slot = &triple_buffer.resources.slots[render_slot_index];
+
+        // Get buffers and bind group from the correct slot (return early if not ready)
         let (Some(instance_buffer), Some(bind_group)) =
-            (&render_data.instance_buffer, &render_data.bind_group)
+            (&slot.instance_buffer, &slot.bind_group)
         else {
             return Ok(());
         };
@@ -281,23 +232,25 @@ impl ViewNode for CandlestickNode {
                     occlusion_query_set: None,
                 });
 
-        // 4. Set pipeline and bindings
+        // 4. Set pipeline and bindings (using triple buffer slot's bind group)
         render_pass.set_pipeline(pipeline);
         render_pass.set_bind_group(0, bind_group, &[]);
         render_pass.set_vertex_buffer(0, *instance_buffer.slice(..));
 
         // 5. Draw: 12 vertices per candle, N instances
         const VERTICES_PER_CANDLE: u32 = 12;
-        render_pass.draw(0..VERTICES_PER_CANDLE, 0..render_data.instance_count);
+        let instance_count = triple_buffer.resources.instance_count;
+        render_pass.draw(0..VERTICES_PER_CANDLE, 0..instance_count);
 
         // Debug: print once
         static DRAW_LOGGED: std::sync::atomic::AtomicBool =
             std::sync::atomic::AtomicBool::new(false);
         if !DRAW_LOGGED.swap(true, std::sync::atomic::Ordering::Relaxed) {
             println!(
-                "Render Node: Drawing {} instances ({} vertices)",
-                render_data.instance_count,
-                VERTICES_PER_CANDLE * render_data.instance_count
+                "Render Node: Drawing {} instances ({} vertices) from slot {}",
+                instance_count,
+                VERTICES_PER_CANDLE * instance_count,
+                render_slot_index
             );
         }
 
@@ -348,180 +301,305 @@ fn build_orthographic_matrix(width: f32, height: f32) -> [[f32; 4]; 4] {
 ///
 /// This system runs in the Render schedule (PrepareResources set) and is responsible
 /// for creating and updating GPU buffers based on extracted data. It implements
-/// smart buffer reuse to minimize allocations and GPU uploads.
+/// triple buffering to eliminate CPU/GPU synchronization stalls.
 ///
-/// # Buffer Management Strategy
-/// - Instance buffer: Only recreated when capacity is insufficient, reuses existing buffer otherwise
-/// - View uniform buffer: Created once, updated only when viewport changes
-/// - Bind groups: Created once with view uniform buffer
+/// # Triple Buffering Strategy
+/// - Uses 3 rotating instance buffers to avoid CPU/GPU contention
+/// - Each frame writes to a different buffer slot
+/// - GPU reads from a buffer written 2 frames ago (guaranteed complete)
+///
+/// # Buffer Management
+/// - Instance buffers: Triple-buffered, one per slot
+/// - View uniform buffer: Shared across all slots (updated when viewport changes)
+/// - Config buffer: Static, created once
+/// - Bind groups: One per slot (references slot's instance buffer + shared uniforms)
 ///
 /// # Performance Optimizations
-/// - Tracks buffer capacity to avoid unnecessary reallocations
-/// - Only writes to GPU when data actually changed (instances_changed flag)
-/// - Reuses buffers across frames for better performance
+/// - Tracks buffer capacity per slot to avoid unnecessary reallocations
+/// - Only writes to GPU when data actually changed
+/// - Fence tracking ensures safe buffer reuse
 fn prepare_candles_instanced(
-    mut render_data: ResMut<CandleRenderData>,
+    mut triple_buffer: ResMut<CandleTripleBuffer>,
     extracted: Res<ExtractedCandlesInstanced>,
     render_device: Res<RenderDevice>,
     render_queue: Res<RenderQueue>,
     pipeline: Option<Res<CandlePipeline>>,
 ) {
-    // Debug: always print once to confirm system runs
-    static LOGGED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-    if !LOGGED.load(std::sync::atomic::Ordering::Relaxed) {
-        println!(
-            "Prepare Debug: system entered, pipeline exists: {}",
-            pipeline.is_some()
-        );
-    }
-
     let Some(pipeline) = pipeline else {
-        if !LOGGED.swap(true, std::sync::atomic::Ordering::Relaxed) {
-            println!("Prepare Debug: NO PIPELINE - skipping");
-        }
+        triple_buffer.resources.skip_frame();
         return;
     };
 
     // Early return if no data
     if extracted.instances.is_empty() {
-        render_data.instance_count = 0;
+        triple_buffer.resources.instance_count = 0;
+        triple_buffer.resources.skip_frame();
         return;
     }
 
-    if !LOGGED.load(std::sync::atomic::Ordering::Relaxed) {
-        println!(
-            "Prepare Debug: {} instances, buffer_capacity={}",
-            extracted.instances.len(),
-            render_data.buffer_capacity
-        );
-    }
+    // ========================================================================
+    // PRE-ALLOCATION (First frame only - allocate all 3 slots upfront)
+    // ========================================================================
 
-    // A. Create/update instance buffer (only when data changed)
     let instance_data: &[u8] = bytemuck::cast_slice(&extracted.instances);
     let required_size = instance_data.len();
 
-    // Only recreate buffer if capacity insufficient
-    if render_data.buffer_capacity < required_size {
-        render_data.instance_buffer = Some(render_device.create_buffer_with_data(
-            &BufferInitDescriptor {
-                label: Some("candlestick_instance_buffer"),
-                contents: instance_data,
-                usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
-            },
-        ));
-        render_data.buffer_capacity = required_size;
-    } else if extracted.instances_changed {
-        // Only write to GPU when instance data actually changed
-        if let Some(buffer) = &render_data.instance_buffer {
-            render_queue.write_buffer(buffer, 0, instance_data);
+    // Pre-allocate all 3 slots on first frame to avoid hitches during rotation
+    // Use growth factor for extra headroom to reduce future reallocations
+    if !triple_buffer.resources.is_preallocated() && required_size > 0 {
+        // Calculate capacity with initial growth factor (1.5^2 = 2.25x headroom)
+        let initial_capacity = super::triple_buffer::calculate_initial_capacity(required_size);
+
+        #[cfg(debug_assertions)]
+        println!(
+            "[Candle] Pre-allocating 3 instance buffers: {} bytes data, {} bytes capacity ({}x headroom)",
+            required_size,
+            initial_capacity,
+            initial_capacity as f32 / required_size as f32
+        );
+
+        // Create a zero-filled buffer at full capacity, then write actual data
+        let mut padded_data = vec![0u8; initial_capacity];
+        padded_data[..required_size].copy_from_slice(instance_data);
+
+        for i in 0..super::triple_buffer::BUFFER_COUNT {
+            let slot = &mut triple_buffer.resources.slots[i];
+            if slot.instance_buffer.is_none() {
+                let label = match i {
+                    0 => "candlestick_instance_buffer_slot0",
+                    1 => "candlestick_instance_buffer_slot1",
+                    _ => "candlestick_instance_buffer_slot2",
+                };
+                slot.instance_buffer = Some(render_device.create_buffer_with_data(
+                    &BufferInitDescriptor {
+                        label: Some(label),
+                        contents: &padded_data,
+                        usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
+                    },
+                ));
+                slot.buffer_capacity = initial_capacity;
+            }
+        }
+
+        // Record allocation stats
+        triple_buffer.resources.record_initial_allocation(initial_capacity);
+    }
+
+    // Track peak instance count for stats
+    triple_buffer.resources.track_instance_count(extracted.instances.len() as u32);
+
+    // ========================================================================
+    // TRIPLE BUFFER SYNCHRONIZATION FLOW
+    // ========================================================================
+
+    // Step 1: Begin frame - acquire current slot and update fence states
+    // Time the begin_frame() call to measure any fence wait overhead
+    let begin_time = Instant::now();
+    let frame_ctx = triple_buffer.resources.begin_frame();
+    let fence_wait_us = begin_time.elapsed().as_micros() as u64;
+    let slot_index = frame_ctx.slot_index;
+
+    // Record debug stats
+    triple_buffer.resources.debug_begin_frame();
+    triple_buffer.resources.debug_record_fence_wait(fence_wait_us);
+    triple_buffer.resources.debug_record_instance_count(extracted.instances.len() as u32);
+
+    // Debug: Log buffer rotation for first 10 frames
+    #[cfg(debug_assertions)]
+    if frame_ctx.frame_number < 10 {
+        let rotation = triple_buffer.resources.rotation_state();
+        println!(
+            "[Candle] Frame {}: Write slot {}, GPU reads slot {}, InFlight slot {} | {} instances | fence_wait={}µs",
+            frame_ctx.frame_number,
+            rotation.write_slot,
+            rotation.gpu_read_slot,
+            rotation.in_flight_slot,
+            extracted.instances.len(),
+            fence_wait_us
+        );
+    }
+
+    // Step 2: Write instance data to current slot's buffer
+    // Track reallocation info outside the borrow scope
+    let mut reallocation_info: Option<(usize, usize)> = None;
+
+    {
+        let slot = &mut triple_buffer.resources.slots[slot_index];
+
+        // Only recreate buffer if capacity insufficient
+        if slot.needs_reallocation(required_size) {
+            // Calculate new capacity with growth factor (1.5x)
+            let new_capacity = super::triple_buffer::calculate_grown_capacity(required_size);
+            let old_capacity = slot.buffer_capacity;
+
+            #[cfg(debug_assertions)]
+            println!(
+                "[Candle] Reallocating slot {}: {} -> {} bytes (required: {})",
+                slot_index, old_capacity, new_capacity, required_size
+            );
+
+            // Create padded buffer at full capacity
+            let mut padded_data = vec![0u8; new_capacity];
+            padded_data[..required_size].copy_from_slice(instance_data);
+
+            let label = match slot_index {
+                0 => "candlestick_instance_buffer_slot0",
+                1 => "candlestick_instance_buffer_slot1",
+                _ => "candlestick_instance_buffer_slot2",
+            };
+            slot.instance_buffer = Some(render_device.create_buffer_with_data(
+                &BufferInitDescriptor {
+                    label: Some(label),
+                    contents: &padded_data,
+                    usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
+                },
+            ));
+
+            slot.buffer_capacity = new_capacity;
+            slot.invalidate_bind_group(); // Buffer changed, need new bind group
+
+            // Store reallocation info for stats recording after borrow ends
+            reallocation_info = Some((old_capacity, new_capacity));
+        } else if extracted.instances_changed {
+            // Only write to GPU when instance data actually changed
+            if let Some(buffer) = &slot.instance_buffer {
+                render_queue.write_buffer(buffer, 0, instance_data);
+            }
         }
     }
 
-    // B. Check if view uniform actually changed
-    let viewport_changed =
-        (render_data.last_viewport_width - extracted.viewport_width).abs() > 0.1
-            || (render_data.last_viewport_height - extracted.viewport_height).abs() > 0.1;
+    // Record reallocation stats after slot borrow is released
+    if let Some((old_capacity, new_capacity)) = reallocation_info {
+        triple_buffer.resources.record_slot_reallocation(old_capacity, new_capacity);
+        triple_buffer.resources.debug_record_reallocation();
+    }
 
-    let colors_changed = render_data.last_bull_color != extracted.bull_color
-        || render_data.last_bear_color != extracted.bear_color
-        || render_data.last_wick_color != extracted.wick_color;
+    // ========================================================================
+    // PER-SLOT VIEW UNIFORM (Triple-buffered to avoid CPU/GPU contention)
+    // ========================================================================
 
-    let view_uniform_changed =
-        viewport_changed || colors_changed || render_data.view_uniform_buffer.is_none();
+    // Build view uniform data
+    let view_uniform = ViewUniform {
+        view_proj: build_orthographic_matrix(
+            extracted.viewport_width,
+            extracted.viewport_height,
+        ),
+        viewport: [
+            0.0,
+            0.0,
+            extracted.viewport_width,
+            extracted.viewport_height,
+        ],
+        bull_color: extracted.bull_color,
+        bear_color: extracted.bear_color,
+        wick_color: extracted.wick_color,
+    };
 
-    // C. Build and update view uniform only when changed
-    if view_uniform_changed {
-        let view_uniform = ViewUniform {
-            view_proj: build_orthographic_matrix(
-                extracted.viewport_width,
-                extracted.viewport_height,
-            ),
-            viewport: [
-                0.0,
-                0.0,
-                extracted.viewport_width,
-                extracted.viewport_height,
-            ],
-            bull_color: extracted.bull_color,
-            bear_color: extracted.bear_color,
-            wick_color: extracted.wick_color,
-        };
+    let uniform_data: &[u8] = bytemuck::bytes_of(&view_uniform);
+    let uniform_size = uniform_data.len();
 
-        let uniform_data: &[u8] = bytemuck::bytes_of(&view_uniform);
+    // Write to current slot's uniform buffer (each slot has its own)
+    {
+        let slot = &mut triple_buffer.resources.slots[slot_index];
 
-        if render_data.view_uniform_buffer.is_none() {
-            render_data.view_uniform_buffer = Some(render_device.create_buffer_with_data(
+        if slot.needs_uniform_reallocation(uniform_size) {
+            let label = match slot_index {
+                0 => "candlestick_view_uniform_slot0",
+                1 => "candlestick_view_uniform_slot1",
+                _ => "candlestick_view_uniform_slot2",
+            };
+            slot.view_uniform_buffer = Some(render_device.create_buffer_with_data(
                 &BufferInitDescriptor {
-                    label: Some("candlestick_view_uniform_buffer"),
+                    label: Some(label),
                     contents: uniform_data,
                     usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
                 },
             ));
-            render_data.bind_group_valid = false; // Need new bind group
-        } else if let Some(buffer) = &render_data.view_uniform_buffer {
+            slot.uniform_buffer_capacity = uniform_size;
+            slot.invalidate_bind_group(); // Buffer changed, need new bind group
+        } else if let Some(buffer) = &slot.view_uniform_buffer {
+            // Always write uniform data to current slot's buffer
             render_queue.write_buffer(buffer, 0, uniform_data);
         }
-
-        // Update tracking state
-        render_data.last_viewport_width = extracted.viewport_width;
-        render_data.last_viewport_height = extracted.viewport_height;
-        render_data.last_bull_color = extracted.bull_color;
-        render_data.last_bear_color = extracted.bear_color;
-        render_data.last_wick_color = extracted.wick_color;
     }
 
-    // D. Create config buffer (once, never changes)
-    if render_data.config_buffer.is_none() {
+    // Update tracking state for change detection
+    triple_buffer.resources.update_view_tracking(
+        extracted.viewport_width,
+        extracted.viewport_height,
+        extracted.bull_color,
+        extracted.bear_color,
+        extracted.wick_color,
+    );
+
+    // ========================================================================
+    // SHARED CONFIG BUFFER (Static, never changes)
+    // ========================================================================
+
+    if triple_buffer.resources.config_buffer.is_none() {
         let config = ChartConfig::default();
         let config_data: &[u8] = bytemuck::bytes_of(&config);
-        render_data.config_buffer = Some(render_device.create_buffer_with_data(
+        triple_buffer.resources.config_buffer = Some(render_device.create_buffer_with_data(
             &BufferInitDescriptor {
                 label: Some("candlestick_config_buffer"),
                 contents: config_data,
                 usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
             },
         ));
-        render_data.bind_group_valid = false; // Force bind group recreation
+        triple_buffer.resources.invalidate_all_bind_groups();
     }
 
-    // E. Create bind group only when needed (buffer recreated or not valid)
-    if let (Some(view_buffer), Some(config_buffer)) =
-        (&render_data.view_uniform_buffer, &render_data.config_buffer)
-    {
-        let needs_bind_group =
-            render_data.bind_group.is_none() || !render_data.bind_group_valid;
+    // ========================================================================
+    // BIND GROUP (Per-slot, references slot's own uniform buffer)
+    // ========================================================================
 
-        if needs_bind_group {
-            render_data.bind_group = Some(render_device.create_bind_group(
-                Some("candlestick_bind_group"),
-                &pipeline.bind_group_layout,
-                &[
-                    BindGroupEntry {
-                        binding: 0,
-                        resource: view_buffer.as_entire_binding(),
-                    },
-                    BindGroupEntry {
-                        binding: 1,
-                        resource: config_buffer.as_entire_binding(),
-                    },
-                ],
-            ));
-            render_data.bind_group_valid = true;
-        }
-    }
+    let needs_bind_group = {
+        let slot = &triple_buffer.resources.slots[slot_index];
+        (slot.bind_group.is_none() || !slot.bind_group_valid)
+            && slot.instance_buffer.is_some()
+            && slot.view_uniform_buffer.is_some()
+            && triple_buffer.resources.config_buffer.is_some()
+    };
 
-    // F. Update instance count
-    render_data.instance_count = extracted.instances.len() as u32;
+    if needs_bind_group {
+        let slot = &triple_buffer.resources.slots[slot_index];
+        let view_buffer = slot.view_uniform_buffer.as_ref().unwrap();
+        let config_buffer = triple_buffer.resources.config_buffer.as_ref().unwrap();
 
-    // Debug: confirm buffer creation
-    if !LOGGED.swap(true, std::sync::atomic::Ordering::Relaxed) {
-        println!(
-            "Prepare Complete: instance_count={}, has_buffer={}, has_bind_group={}",
-            render_data.instance_count,
-            render_data.instance_buffer.is_some(),
-            render_data.bind_group.is_some()
+        let label = match slot_index {
+            0 => "candlestick_bind_group_slot0",
+            1 => "candlestick_bind_group_slot1",
+            _ => "candlestick_bind_group_slot2",
+        };
+
+        let bind_group = render_device.create_bind_group(
+            Some(label),
+            &pipeline.bind_group_layout,
+            &[
+                BindGroupEntry {
+                    binding: 0,
+                    resource: view_buffer.as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 1,
+                    resource: config_buffer.as_entire_binding(),
+                },
+            ],
         );
+
+        let slot = &mut triple_buffer.resources.slots[slot_index];
+        slot.bind_group = Some(bind_group);
+        slot.bind_group_valid = true;
     }
+
+    // Update instance count
+    triple_buffer.resources.instance_count = extracted.instances.len() as u32;
+
+    // Complete debug frame tracking
+    triple_buffer.resources.debug_end_frame();
+
+    // Step 3: Complete frame - mark slot as submitted, advance frame counter
+    triple_buffer.resources.complete_frame();
 }
 
 // ============================================================================
@@ -680,6 +758,7 @@ fn extract_candles_instanced(
     }
 
     // Debug: print first frame only
+    #[cfg(debug_assertions)]
     if extracted.last_candle_count == 0 {
         println!("GPU Instancing Debug:");
         println!(
@@ -746,6 +825,7 @@ pub struct CandlestickInstancedPlugin;
 
 impl Plugin for CandlestickInstancedPlugin {
     fn build(&self, app: &mut App) {
+        #[cfg(debug_assertions)]
         println!("CandlestickInstancedPlugin::build() called");
 
         // Register main world resource for toggling instancing
@@ -753,16 +833,19 @@ impl Plugin for CandlestickInstancedPlugin {
 
         // Get the render sub-app
         let Some(render_app) = app.get_sub_app_mut(RenderApp) else {
+            #[cfg(debug_assertions)]
             println!("WARNING: RenderApp not available!");
             return;
         };
 
+        #[cfg(debug_assertions)]
         println!("RenderApp found, registering systems...");
 
         // Register render world resources
         render_app
             .init_resource::<ExtractedCandlesInstanced>()
-            .init_resource::<CandleRenderData>()
+            // Triple-buffered resources for GPU synchronization
+            .init_resource::<CandleTripleBuffer>()
             // Add extract system to populate render world data
             .add_systems(ExtractSchedule, extract_candles_instanced)
             // Add prepare system to create/update GPU buffers
@@ -788,13 +871,16 @@ impl Plugin for CandlestickInstancedPlugin {
     }
 
     fn finish(&self, app: &mut App) {
+        #[cfg(debug_assertions)]
         println!("CandlestickInstancedPlugin::finish() called");
 
         let Some(render_app) = app.get_sub_app_mut(RenderApp) else {
+            #[cfg(debug_assertions)]
             println!("WARNING: RenderApp not available in finish!");
             return;
         };
 
+        #[cfg(debug_assertions)]
         println!("Creating pipeline...");
 
         let render_device = render_app.world().resource::<RenderDevice>();
@@ -881,6 +967,7 @@ impl Plugin for CandlestickInstancedPlugin {
             bind_group_layout,
         });
 
+        #[cfg(debug_assertions)]
         println!("CandlePipeline inserted successfully");
     }
 }

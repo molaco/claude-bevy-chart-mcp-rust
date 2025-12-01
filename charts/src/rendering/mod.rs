@@ -7,6 +7,7 @@ pub mod instancing;
 pub mod instanced_plugin;
 pub mod volume_instanced_plugin;
 pub mod systems;
+pub mod triple_buffer;
 
 // Re-export key types for convenience
 pub use instancing::{CandleInstance, ChartConfig, ViewUniform, VolumeInstance};
@@ -16,7 +17,6 @@ pub use instanced_plugin::{
     CandlestickInstancedPlugin,
     InstancingEnabled,
     ExtractedCandlesInstanced,
-    CandleRenderData,
     CandlePipeline,
     CandlestickInstancedLabel,
     CandlestickNode,
@@ -26,7 +26,6 @@ pub use instanced_plugin::{
 pub use volume_instanced_plugin::{
     VolumeInstancedPlugin,
     ExtractedVolumesInstanced,
-    VolumeRenderData,
     VolumePipeline,
     VolumeInstancedLabel,
     VolumeNode,
@@ -34,3 +33,18 @@ pub use volume_instanced_plugin::{
 
 // Re-export all rendering systems from systems module
 pub use systems::*;
+
+// Re-export triple buffering infrastructure
+pub use triple_buffer::{
+    CandleTripleBuffer,
+    VolumeTripleBuffer,
+    TripleBufferedResources,
+    FrameSlot,
+    FrameFence,
+    FrameSyncState,
+    FrameContext,
+    SlotAcquisition,
+    RotationState,
+    BUFFER_COUNT,
+    FRAMES_UNTIL_SAFE,
+};
