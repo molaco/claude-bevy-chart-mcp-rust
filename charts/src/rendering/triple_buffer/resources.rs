@@ -199,6 +199,11 @@ pub struct TripleBufferedResources {
     /// Debug statistics for performance monitoring (Phase 6)
     /// Enable with `debug_stats.enable()` for detailed timing info
     pub debug_stats: DebugStats,
+
+    /// Track which slot was written to in current frame.
+    /// This is set by prepare (begin_frame) and read by render (render_slot_index).
+    /// Ensures render always reads from the slot prepare just wrote to.
+    pub current_write_slot: usize,
 }
 
 impl TripleBufferedResources {
@@ -230,6 +235,17 @@ impl TripleBufferedResources {
     #[inline]
     pub fn current_index(&self) -> usize {
         (self.frame_count % BUFFER_COUNT as u64) as usize
+    }
+
+    /// Returns the slot index that render should read from.
+    ///
+    /// This is the slot that was written to by prepare in the current frame.
+    /// By storing this value in `begin_frame()`, we ensure render always reads
+    /// from the correct slot regardless of when `complete_frame()` advances
+    /// the frame counter.
+    #[inline]
+    pub fn render_slot_index(&self) -> usize {
+        self.current_write_slot
     }
 
     /// Returns a reference to the current frame slot
@@ -715,7 +731,8 @@ impl TripleBufferedResources {
     /// # Workflow
     /// 1. Updates fence states for all slots
     /// 2. Acquires the current slot (waits if necessary)
-    /// 3. Marks the slot as being written
+    /// 3. Stores the write slot for render to read later
+    /// 4. Marks the slot as being written
     ///
     /// After calling this, write your data to the buffer, then call `complete_frame()`.
     pub fn begin_frame(&mut self) -> FrameContext {
@@ -725,7 +742,10 @@ impl TripleBufferedResources {
         // Step 2: Acquire current slot
         let slot_index = self.wait_for_current_slot();
 
-        // Step 3: Begin writing
+        // Step 3: Store which slot we're writing to for render to read later
+        self.current_write_slot = slot_index;
+
+        // Step 4: Begin writing
         self.begin_frame_write();
 
         FrameContext {

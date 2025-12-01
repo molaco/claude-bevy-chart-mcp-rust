@@ -181,21 +181,31 @@ impl ViewNode for CandlestickNode {
         // 1. Get triple-buffered resources directly
         let triple_buffer = world.resource::<CandleTripleBuffer>();
 
-        // Skip if no instances to render
-        if triple_buffer.resources.instance_count == 0 {
+        // Get the slot that was written in the prepare phase of THIS frame.
+        // Uses current_write_slot which was set by begin_frame() before complete_frame() advanced the counter.
+        let render_slot_index = triple_buffer.resources.render_slot_index();
+        let slot = &triple_buffer.resources.slots[render_slot_index];
+
+        // Skip if no instances in this slot
+        if slot.instance_count == 0 {
             return Ok(());
         }
-
-        // Get the slot that was written to in prepare phase
-        // Since prepare calls complete_frame() which advances the counter,
-        // we look back 1 frame to find the slot containing current frame's data
-        let render_slot_index = triple_buffer.resources.index_frames_ago(1);
-        let slot = &triple_buffer.resources.slots[render_slot_index];
 
         // Get buffers and bind group from the correct slot (return early if not ready)
         let (Some(instance_buffer), Some(bind_group)) =
             (&slot.instance_buffer, &slot.bind_group)
         else {
+            // Debug: log when slot is not ready
+            static SKIP_LOGGED: std::sync::atomic::AtomicBool =
+                std::sync::atomic::AtomicBool::new(false);
+            if !SKIP_LOGGED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                println!(
+                    "[Render] SKIP: slot {} not ready (buffer={}, bind_group={})",
+                    render_slot_index,
+                    slot.instance_buffer.is_some(),
+                    slot.bind_group.is_some()
+                );
+            }
             return Ok(());
         };
 
@@ -238,19 +248,29 @@ impl ViewNode for CandlestickNode {
         render_pass.set_vertex_buffer(0, *instance_buffer.slice(..));
 
         // 5. Draw: 12 vertices per candle, N instances
+        // Use the slot's instance_count (not the global one) to match the data in this slot
         const VERTICES_PER_CANDLE: u32 = 12;
-        let instance_count = triple_buffer.resources.instance_count;
+        let instance_count = slot.instance_count;
         render_pass.draw(0..VERTICES_PER_CANDLE, 0..instance_count);
 
-        // Debug: print once
-        static DRAW_LOGGED: std::sync::atomic::AtomicBool =
-            std::sync::atomic::AtomicBool::new(false);
-        if !DRAW_LOGGED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        // Debug: track render node calls per frame
+        static RENDER_FRAME_COUNT: std::sync::atomic::AtomicU64 =
+            std::sync::atomic::AtomicU64::new(0);
+        static LAST_LOGGED_FRAME: std::sync::atomic::AtomicU64 =
+            std::sync::atomic::AtomicU64::new(0);
+
+        let render_frame = RENDER_FRAME_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let last_logged = LAST_LOGGED_FRAME.load(std::sync::atomic::Ordering::Relaxed);
+
+        // Log every 60 frames or first 10 frames
+        if render_frame < 10 || (render_frame - last_logged) >= 60 {
+            LAST_LOGGED_FRAME.store(render_frame, std::sync::atomic::Ordering::Relaxed);
             println!(
-                "Render Node: Drawing {} instances ({} vertices) from slot {}",
+                "[Render] Frame {}: slot={}, instances={}, frame_count={}",
+                render_frame,
+                render_slot_index,
                 instance_count,
-                VERTICES_PER_CANDLE * instance_count,
-                render_slot_index
+                triple_buffer.resources.frame_count
             );
         }
 
@@ -362,6 +382,9 @@ fn prepare_candles_instanced(
         let mut padded_data = vec![0u8; initial_capacity];
         padded_data[..required_size].copy_from_slice(instance_data);
 
+        // Pre-allocate all slots with same data and same instance count
+        // This ensures gpu_read_index() will find valid data from the start
+        let initial_instance_count = extracted.instances.len() as u32;
         for i in 0..super::triple_buffer::BUFFER_COUNT {
             let slot = &mut triple_buffer.resources.slots[i];
             if slot.instance_buffer.is_none() {
@@ -378,6 +401,8 @@ fn prepare_candles_instanced(
                     },
                 ));
                 slot.buffer_capacity = initial_capacity;
+                // Set instance count for all slots so gpu_read_index() finds valid data
+                slot.instance_count = initial_instance_count;
             }
         }
 
@@ -460,8 +485,10 @@ fn prepare_candles_instanced(
 
             // Store reallocation info for stats recording after borrow ends
             reallocation_info = Some((old_capacity, new_capacity));
-        } else if extracted.instances_changed {
-            // Only write to GPU when instance data actually changed
+        } else {
+            // ALWAYS write to GPU - each slot needs current data because this slot
+            // may have stale data from 3 frames ago when it was last written.
+            // Without this, stopping a zoom causes flickering as we render old data.
             if let Some(buffer) = &slot.instance_buffer {
                 render_queue.write_buffer(buffer, 0, instance_data);
             }
@@ -592,8 +619,10 @@ fn prepare_candles_instanced(
         slot.bind_group_valid = true;
     }
 
-    // Update instance count
-    triple_buffer.resources.instance_count = extracted.instances.len() as u32;
+    // Update instance count - store in BOTH slot and global for backwards compatibility
+    let instance_count = extracted.instances.len() as u32;
+    triple_buffer.resources.instance_count = instance_count;
+    triple_buffer.resources.slots[slot_index].instance_count = instance_count;
 
     // Complete debug frame tracking
     triple_buffer.resources.debug_end_frame();
@@ -787,6 +816,22 @@ fn extract_candles_instanced(
         );
     }
 
+    // Debug: Check for duplicate x positions (would indicate 3x rendering bug)
+    #[cfg(debug_assertions)]
+    {
+        use std::collections::HashMap;
+        let mut x_counts: HashMap<i32, u32> = HashMap::new();
+        for inst in &extracted.instances {
+            let x_key = (inst.x_position * 100.0) as i32; // Round to 2 decimals
+            *x_counts.entry(x_key).or_insert(0) += 1;
+        }
+        let duplicates: Vec<_> = x_counts.iter().filter(|(_, &count)| count > 1).collect();
+        if !duplicates.is_empty() && duplicates.len() <= 10 {
+            println!("[Extract] WARNING: Found {} duplicate x positions: {:?}",
+                duplicates.len(), duplicates);
+        }
+    }
+
     // Update tracking state
     extracted.last_time_start = candle_data.candles[start].time;
     extracted.last_time_end = candle_data.candles[end - 1].time;
@@ -953,7 +998,7 @@ impl Plugin for CandlestickInstancedPlugin {
             },
             depth_stencil: None,
             multisample: MultisampleState {
-                count: 4, // Match the MSAA sample count used by Bevy's default render pass
+                count: 1, // Disabled MSAA - testing ghosting fix
                 mask: !0,
                 alpha_to_coverage_enabled: false,
             },

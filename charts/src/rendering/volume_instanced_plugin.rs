@@ -86,15 +86,15 @@ impl ViewNode for VolumeNode {
         // Get triple-buffered resources directly
         let triple_buffer = world.resource::<VolumeTripleBuffer>();
 
-        if triple_buffer.resources.instance_count == 0 {
+        // Get the slot that was written in the prepare phase of THIS frame.
+        // Uses current_write_slot which was set by begin_frame() before complete_frame() advanced the counter.
+        let render_slot_index = triple_buffer.resources.render_slot_index();
+        let slot = &triple_buffer.resources.slots[render_slot_index];
+
+        // Skip if no instances in this slot
+        if slot.instance_count == 0 {
             return Ok(());
         }
-
-        // Get the slot that was written to in prepare phase
-        // Since prepare calls complete_frame() which advances the counter,
-        // we look back 1 frame to find the slot containing current frame's data
-        let render_slot_index = triple_buffer.resources.index_frames_ago(1);
-        let slot = &triple_buffer.resources.slots[render_slot_index];
 
         let (Some(instance_buffer), Some(bind_group)) =
             (&slot.instance_buffer, &slot.bind_group)
@@ -138,8 +138,9 @@ impl ViewNode for VolumeNode {
         render_pass.set_vertex_buffer(0, *instance_buffer.slice(..));
 
         // 6 vertices per volume bar (2 triangles for quad)
+        // Use the slot's instance_count (not the global one) to match the data in this slot
         const VERTICES_PER_BAR: u32 = 6;
-        let instance_count = triple_buffer.resources.instance_count;
+        let instance_count = slot.instance_count;
         render_pass.draw(0..VERTICES_PER_BAR, 0..instance_count);
 
         Ok(())
@@ -216,6 +217,9 @@ fn prepare_volumes_instanced(
         let mut padded_data = vec![0u8; initial_capacity];
         padded_data[..required_size].copy_from_slice(instance_data);
 
+        // Pre-allocate all slots with same data and same instance count
+        // This ensures gpu_read_index() will find valid data from the start
+        let initial_instance_count = extracted.instances.len() as u32;
         for i in 0..super::triple_buffer::BUFFER_COUNT {
             let slot = &mut triple_buffer.resources.slots[i];
             if slot.instance_buffer.is_none() {
@@ -232,6 +236,8 @@ fn prepare_volumes_instanced(
                     },
                 ));
                 slot.buffer_capacity = initial_capacity;
+                // Set instance count for all slots so gpu_read_index() finds valid data
+                slot.instance_count = initial_instance_count;
             }
         }
 
@@ -314,7 +320,10 @@ fn prepare_volumes_instanced(
 
             // Store reallocation info for stats recording after borrow ends
             reallocation_info = Some((old_capacity, new_capacity));
-        } else if extracted.instances_changed {
+        } else {
+            // ALWAYS write to GPU - each slot needs current data because this slot
+            // may have stale data from 3 frames ago when it was last written.
+            // Without this, stopping a zoom causes flickering as we render old data.
             if let Some(buffer) = &slot.instance_buffer {
                 render_queue.write_buffer(buffer, 0, instance_data);
             }
@@ -420,8 +429,10 @@ fn prepare_volumes_instanced(
         slot.bind_group_valid = true;
     }
 
-    // Update instance count
-    triple_buffer.resources.instance_count = extracted.instances.len() as u32;
+    // Update instance count - store in BOTH slot and global for backwards compatibility
+    let instance_count = extracted.instances.len() as u32;
+    triple_buffer.resources.instance_count = instance_count;
+    triple_buffer.resources.slots[slot_index].instance_count = instance_count;
 
     // Complete debug frame tracking
     triple_buffer.resources.debug_end_frame();
@@ -632,7 +643,7 @@ impl Plugin for VolumeInstancedPlugin {
             },
             depth_stencil: None,
             multisample: MultisampleState {
-                count: 4,
+                count: 1, // Disabled MSAA - testing ghosting fix
                 mask: !0,
                 alpha_to_coverage_enabled: false,
             },
