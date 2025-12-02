@@ -56,6 +56,8 @@ fn main() {
         .add_plugins(FrameTimeDiagnosticsPlugin::default())
         .add_plugins(CandlestickInstancedPlugin)
         .add_plugins(VolumeInstancedPlugin)
+        // Set clear color to dark background - prevents frame buffer ghosting
+        .insert_resource(ClearColor(Color::srgb(0.1, 0.1, 0.1)))
         // Configure system set ordering: Input -> StateUpdate -> Rendering -> Cleanup
         .configure_sets(
             Update,
@@ -134,8 +136,8 @@ fn setup(mut commands: Commands) {
     let interaction_config = InteractionConfig::default();
     let z_layers = ZLayerConfig::default();
 
-    // Spawn camera
-    commands.spawn(Camera2d);
+    // Spawn camera with MSAA disabled to prevent ghosting artifacts
+    commands.spawn((Camera2d, Msaa::Off));
 
     // Initialize database connection
     let db_path = "/home/molaco/.local/share/flowsurface/flowsurface.duckdb";

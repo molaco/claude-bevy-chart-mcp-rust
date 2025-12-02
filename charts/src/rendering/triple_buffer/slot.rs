@@ -45,6 +45,10 @@ pub struct FrameSlot {
     /// Fence tracking for GPU synchronization
     /// Tracks when this slot was submitted and whether GPU is done
     pub fence: FrameFence,
+
+    /// Number of instances stored in this slot's buffer
+    /// Each slot tracks its own count since different frames may have different counts
+    pub instance_count: u32,
 }
 
 impl FrameSlot {
