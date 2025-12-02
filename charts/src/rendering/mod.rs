@@ -10,7 +10,7 @@ pub mod systems;
 pub mod triple_buffer;
 
 // Re-export key types for convenience
-pub use instancing::{CandleInstance, ChartConfig, ViewUniform, VolumeInstance};
+pub use instancing::{CandleInstance, CandleStyle, ChartConfig, ViewUniform, VolumeInstance};
 
 // Re-export plugin and resources
 pub use instanced_plugin::{

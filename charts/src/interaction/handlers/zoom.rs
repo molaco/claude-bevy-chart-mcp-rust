@@ -3,6 +3,7 @@ use bevy::input::mouse::MouseWheel;
 
 use crate::config::InteractionConfig;
 use crate::interaction::state::InteractionState;
+use crate::rendering::CandleStyle;
 use crate::types::{CandleData, IndicatorState, PaneManager, ViewportState, right_spacing_candles};
 
 // ============================================================================
@@ -67,6 +68,14 @@ pub fn handle_zoom(
             .saturating_sub((new_count as f32 * focus_percent) as usize)
             .min((candle_data.candles.len() + spacing).saturating_sub(new_count));
         viewport_state.visible_candle_count = new_count;
+
+        // Calculate style for debug output
+        let style = CandleStyle::from_count(new_count);
+
+        println!(
+            "Visible: {} | Style: {:?}",
+            new_count, style
+        );
 
         // Update Y-axis bounds for all panes
         pane_manager.update_pane_bounds(

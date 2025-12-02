@@ -65,7 +65,7 @@ pub const ZOOM_OUT_FACTOR: f32 = 1.1;
 pub const MIN_VISIBLE_CANDLES: f32 = 10.0;
 
 /// Maximum number of candles that can be visible
-pub const MAX_VISIBLE_CANDLES: f32 = 10000.0;
+pub const MAX_VISIBLE_CANDLES: f32 = 50000.0;
 
 /// Default number of visible candles on startup
 pub const DEFAULT_VISIBLE_CANDLES: usize = 50;
@@ -82,6 +82,14 @@ pub const LAZY_LOAD_THRESHOLD: usize = 20;
 
 /// Number of candles to load per lazy load request
 pub const LAZY_LOAD_BATCH_SIZE: i64 = 100;
+
+// ============================================================================
+// ADAPTIVE VISUALIZATION THRESHOLDS
+// ============================================================================
+
+/// Threshold for switching from Candlestick to HighLowBar style
+/// When visible candles exceed this count, body shows high/low instead of open/close
+pub const HIGHLOW_BAR_THRESHOLD: usize = 1000;
 
 // ============================================================================
 // RENDERING DIMENSIONS

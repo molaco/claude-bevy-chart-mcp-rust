@@ -5,6 +5,37 @@
 //! to meet GPU memory alignment requirements.
 
 use bytemuck::{Pod, Zeroable};
+use crate::config::HIGHLOW_BAR_THRESHOLD;
+
+/// Adaptive visualization style based on visible candle count
+///
+/// Switches rendering mode based on data density to improve visibility.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CandleStyle {
+    /// Full candlestick with body (open/close) and wicks (high/low)
+    #[default]
+    Candlestick,
+    /// High/Low bars - body spans full price range, wicks hidden
+    HighLowBar,
+}
+
+impl CandleStyle {
+    /// Select the appropriate candle style based on visible candle count
+    #[inline]
+    pub fn from_count(visible_count: usize) -> Self {
+        if visible_count >= HIGHLOW_BAR_THRESHOLD {
+            CandleStyle::HighLowBar
+        } else {
+            CandleStyle::Candlestick
+        }
+    }
+
+    /// Returns true if the body should show high/low instead of open/close
+    #[inline]
+    pub fn body_shows_high_low(&self) -> bool {
+        matches!(self, CandleStyle::HighLowBar)
+    }
+}
 use bevy::mesh::VertexBufferLayout;
 use bevy::render::render_resource::{VertexStepMode, VertexAttribute, VertexFormat};
 

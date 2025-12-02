@@ -15,7 +15,7 @@
 //! - `CandlePipeline`: Cached render pipeline and bind group layout
 //! - `InstancingEnabled`: Toggle for enabling/disabling GPU instancing
 
-use super::instancing::{CandleInstance, ChartConfig, ViewUniform};
+use super::instancing::{CandleInstance, CandleStyle, ChartConfig, ViewUniform};
 use super::triple_buffer::CandleTripleBuffer;
 use crate::types::{CandleData, ChartColors, PaneManager, ViewportState};
 use std::time::Instant;
@@ -744,6 +744,9 @@ fn extract_candles_instanced(
     let candle_width = viewport.width() / visible_count.max(1) as f32;
     let body_width = candle_width * crate::config::CANDLE_BODY_WIDTH_RATIO;
 
+    // Determine adaptive visualization style based on visible candle count
+    let candle_style = CandleStyle::from_count(visible_count);
+
     // Coordinate transformation functions (match ChartSpace::to_world exactly)
     let price_to_y = |price: f64| -> f32 {
         let price_percent = if price_range > 0.0 {
@@ -781,8 +784,18 @@ fn extract_candles_instanced(
             bear_count += 1;
         }
 
+        // Adaptive visualization: for HighLowBar style, body shows high/low
+        // The wick (drawn behind body) becomes invisible when body covers full range
+        let (instance_open, instance_close) = if candle_style.body_shows_high_low() {
+            // Body spans high to low, color still based on original direction
+            (high_y, low_y)
+        } else {
+            // Normal: body shows open/close
+            (open_y, close_y)
+        };
+
         extracted.instances.push(CandleInstance::with_bullish(
-            x_pos, body_width, open_y, high_y, low_y, close_y, is_bullish,
+            x_pos, body_width, instance_open, high_y, low_y, instance_close, is_bullish,
         ));
     }
 
@@ -797,7 +810,7 @@ fn extract_candles_instanced(
             bear_count
         );
         println!("  Viewport: {:?}", viewport);
-        println!("  Body width: {}", body_width);
+        println!("  Body width: {:.2}px | Style: {:?}", candle_width, candle_style);
         if let Some(first) = extracted.instances.first() {
             println!(
                 "  First instance: x={}, w={}, o={}, h={}, l={}, c={}, bull={}",
