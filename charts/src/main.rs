@@ -56,8 +56,6 @@ fn main() {
         .add_plugins(FrameTimeDiagnosticsPlugin::default())
         .add_plugins(CandlestickInstancedPlugin)
         .add_plugins(VolumeInstancedPlugin)
-        // Set clear color to dark background - prevents frame buffer ghosting
-        .insert_resource(ClearColor(Color::srgb(0.1, 0.1, 0.1)))
         // Configure system set ordering: Input -> StateUpdate -> Rendering -> Cleanup
         .configure_sets(
             Update,
